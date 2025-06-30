@@ -128,10 +128,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Firebase
-serviceAccountKey.json
-*.json
-
 # IDE
 .vscode/
 .idea/

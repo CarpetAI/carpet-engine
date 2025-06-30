@@ -1,0 +1,48 @@
+{
+  "name": "carpet-engine",
+  "description": "Session Events API for retrieving session events from Google Cloud Storage",
+  "repository": "https://github.com/yourusername/carpet-engine",
+  "logo": "",
+  "keywords": ["python", "fastapi", "session-replay", "analytics"],
+  "env": {
+    "BUCKET_NAME": {
+      "description": "Google Cloud Storage bucket name",
+      "value": "session-replays"
+    },
+    "SERVICE_ACCOUNT_KEY_PATH": {
+      "description": "Path to Google Cloud service account key file",
+      "value": "app/config/serviceAccountKey.json"
+    },
+    "API_TITLE": {
+      "description": "API title",
+      "value": "Session Events API"
+    },
+    "API_DESCRIPTION": {
+      "description": "API description",
+      "value": "API for retrieving session events from Google Cloud Storage"
+    },
+    "API_VERSION": {
+      "description": "API version",
+      "value": "1.0.0"
+    },
+    "HOST": {
+      "description": "Host to bind to",
+      "value": "0.0.0.0"
+    },
+    "DEBUG": {
+      "description": "Debug mode",
+      "value": "false"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+} 
