@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 from pydantic_settings import BaseSettings
 
@@ -8,7 +9,7 @@ class Settings(BaseSettings):
     api_description: str = "API for retrieving session events from Google Cloud Storage"
     api_version: str = "1.0.0"
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = int(os.getenv("PORT", 8000))
     debug: bool = False
     class Config:
         env_file = ".env"
