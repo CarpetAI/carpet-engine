@@ -1,10 +1,22 @@
 import requests
 import json
 import os
+import logging
 from datetime import datetime
 from google.cloud import storage
 from google.oauth2 import service_account
 from google.cloud import firestore
+from app.services.firestore_service import save_session_metadata, get_session_ids
+from app.services.analysis_service import process_session_replay
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
 
 def get_storage_client():
     creds = service_account.Credentials.from_service_account_file(
@@ -91,12 +103,118 @@ def save_session_to_bucket(session_id, events, timestamp=None):
         print(f"Error saving session {session_id} to bucket: {e}")
         return False
 
+def analyze_last_50_sessions(project_id: str = "f91c1c07-2a54-4756-8b2f-9b4fff44da39"):
+    """
+    Pull the last 50 sessions and run analysis on them using process_session_replay.
+    
+    Args:
+        project_id: The project ID to fetch sessions for
+        
+    Returns:
+        Dictionary with analysis results
+    """
+    print(f"Starting analysis of last 50 sessions for project: {project_id}")
+    
+    try:
+        # Get the last 50 sessions from Firestore
+        sessions = get_session_ids(project_id)
+        
+        if not sessions:
+            print("No sessions found for this project")
+            return {"status": "no_sessions", "message": "No sessions found"}
+        
+        # Limit to last 50 sessions
+        sessions = sessions[:50]
+        print(f"Found {len(sessions)} sessions to analyze")
+        
+        analysis_results = {
+            "project_id": project_id,
+            "total_sessions": len(sessions),
+            "successful_analyses": 0,
+            "failed_analyses": 0,
+            "session_results": [],
+            "summary": {
+                "total_events": 0,
+                "total_actions": 0,
+                "total_chunks": 0,
+                "stored_chunks": 0
+            }
+        }
+        
+        for i, session in enumerate(sessions, 1):
+            session_id = session.get("sessionId")
+            print(f"\n[{i}/{len(sessions)}] Analyzing session: {session_id}")
+            
+            try:
+                # Fetch events for this session
+                events = fetch_events_from_api(session_id)
+                
+                if not events:
+                    print(f"No events found for session {session_id}")
+                    analysis_results["failed_analyses"] += 1
+                    analysis_results["session_results"].append({
+                        "session_id": session_id,
+                        "status": "no_events",
+                        "message": "No events found"
+                    })
+                    continue
+                
+                print(f"Found {len(events)} events for session {session_id}")
+                
+                # Run analysis using process_session_replay
+                result = process_session_replay(session_id, events)
+                print("HUBBAADDAA")
+                
+                # Update summary statistics
+                if result.get("status") == "success":
+                    analysis_results["successful_analyses"] += 1
+                    analysis_results["summary"]["total_events"] += result.get("total_events", 0)
+                    analysis_results["summary"]["total_actions"] += result.get("total_actions", 0)
+                    analysis_results["summary"]["total_chunks"] += result.get("total_chunks", 0)
+                    analysis_results["summary"]["stored_chunks"] += result.get("stored_chunks", 0)
+                    
+                    print(f"✓ Analysis successful: {result.get('total_actions')} actions, {result.get('total_chunks')} chunks, {result.get('stored_chunks')} stored")
+                else:
+                    analysis_results["failed_analyses"] += 1
+                    print(f"✗ Analysis failed: {result.get('message', 'Unknown error')}")
+                
+                analysis_results["session_results"].append(result)
+                
+            except Exception as e:
+                print(f"Error analyzing session {session_id}: {e}")
+                analysis_results["failed_analyses"] += 1
+                analysis_results["session_results"].append({
+                    "session_id": session_id,
+                    "status": "error",
+                    "message": str(e)
+                })
+        
+        # Print final summary
+        print(f"\n{'='*50}")
+        print(f"ANALYSIS COMPLETE")
+        print(f"{'='*50}")
+        print(f"Project ID: {project_id}")
+        print(f"Total sessions processed: {analysis_results['total_sessions']}")
+        print(f"Successful analyses: {analysis_results['successful_analyses']}")
+        print(f"Failed analyses: {analysis_results['failed_analyses']}")
+        print(f"Total events processed: {analysis_results['summary']['total_events']}")
+        print(f"Total actions extracted: {analysis_results['summary']['total_actions']}")
+        print(f"Total chunks created: {analysis_results['summary']['total_chunks']}")
+        print(f"Total chunks stored in Pinecone: {analysis_results['summary']['stored_chunks']}")
+        print(f"{'='*50}")
+        
+        return analysis_results
+        
+    except Exception as e:
+        print(f"Error in analyze_last_50_sessions: {e}")
+        return {"status": "error", "message": str(e)}
+
 def main():
     # Update all session replays with project ID
-    project_id = "5694ea67-5b4a-4ac8-a5bd-3268e3a7bb88"
-    print(f"Updating all session replays with project ID: {project_id}")
-    updated_count = update_session_replays_with_project_id(project_id)
-    # print(f"Updated {updated_count} session replays")
+    # project_id = "5694ea67-5b4a-4ac8-a5bd-3268e3a7bb88"
+    # print(f"Updating all session replays with project ID: {project_id}")
+    # updated_count = update_session_replays_with_project_id(project_id)
+    # # print(f"Updated {updated_count} session replays")
     
     # print("\nFetching session IDs...")
     # sessions = fetch_session_ids()
@@ -113,6 +231,8 @@ def main():
     #     url = session.get("url")
     #     gcs_path = session.get("gcs_path")
         
+    #     save_session_metadata(session_id, gcs_path, "f91c1c07-2a54-4756-8b2f-9b4fff44da39")
+        
     #     print(f"\nProcessing session: {session_id}")
     #     print(f"URL: {url}")
     #     print(f"GCS Path: {gcs_path}")
@@ -128,6 +248,9 @@ def main():
     #             print("Failed to save session")
     #     else:
     #         print("No events found for this session")
+
+    # Run analysis on last 50 sessions
+    analyze_last_50_sessions()
 
 if __name__ == "__main__":
     main() 

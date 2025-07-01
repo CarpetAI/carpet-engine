@@ -71,7 +71,7 @@ async def save_session_replay_data(request: Request):
         gcs_url = f"gs://{bucket_name}/sessions/{session_id}.json"
         events = session_json.get("events", [])
         success = save_session_metadata(session_id, gcs_url, project_id)
-        process_session_replay(session_id, events)
+        # process_session_replay(session_id, events)
         
         if success:
             return JSONResponse(content={"status": "success", "file": gcs_url})
