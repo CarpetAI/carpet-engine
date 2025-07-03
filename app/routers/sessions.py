@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from app.services.firebase_service import get_fb_session_events, get_bucket
 from app.services.firestore_service import get_session_ids, get_user_projects, create_project, get_project, save_session_metadata, get_project_by_api_key
-from app.services.analysis_service import process_session_replay
+from app.services.analysis_service import  generate_activity_logs
 from app.services.rag_service import get_relevant_chunks_for_rag
 
 APPLOGGER = logging.getLogger(__name__)
@@ -51,7 +51,8 @@ async def save_session_replay_data(request: Request):
                 first_dt = datetime.fromtimestamp(first_ts / 1000)
                 last_dt = datetime.fromtimestamp(last_ts / 1000)
                 session_duration = last_dt - first_dt
-                if session_duration > timedelta(minutes=30):
+                if session_duration > timedelta(minutes=60):
+                    APPLOGGER.info(f"Session {session_id} exceeds 30 minutes. Refusing to save.")
                     return JSONResponse(content={
                         "status": "too_long",
                         "message": "Session exceeds 30 minutes",
@@ -73,6 +74,9 @@ async def save_session_replay_data(request: Request):
         success = save_session_metadata(session_id, gcs_url, project_id)
         # process_session_replay(session_id, events)
         
+        if all_events:
+            generate_activity_logs(all_events)
+            
         if success:
             return JSONResponse(content={"status": "success", "file": gcs_url})
         else:
