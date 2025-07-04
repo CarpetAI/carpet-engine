@@ -10,14 +10,12 @@ from app.services.firebase_service import get_bucket
 
 APPLOGGER = logging.getLogger(__name__)
 
-# Data Models
 class ActionObject(BaseModel):
     action: str
     element_type: str
     metadata: Dict[str, Any]
     id: str
 
-# DOM Processing Functions
 def build_node_map(node, node_map=None):  
     if node_map is None:  
         node_map = {}  
@@ -53,7 +51,7 @@ def extract_attributes(node: Dict[str, Any]) -> Dict[str, str]:
     
     semantic_attrs = {}
     semantic_keys = [
-        'placeholder', 'title', 'alt', 'aria-label', 'href'
+        'id', 'placeholder', 'title', 'alt', 'aria-label', 'href'
     ]
     
     for key, value in attributes.items():
@@ -66,7 +64,6 @@ def extract_attributes(node: Dict[str, Any]) -> Dict[str, str]:
     
     return semantic_attrs
 
-# Event Processing Functions
 def detect_action(event: Dict[str, Any]) -> str:
     data = event.get('data')
     if data.get('source') == 2 and data.get('type') == 2: #Click event
@@ -111,6 +108,47 @@ def should_skip_click(node: Dict[str, Any], attributes: Dict[str, str]) -> bool:
     
     return False
 
+def generate_action_id(action_object: ActionObject) -> str:
+    action = action_object.action
+    
+    if action == "clicked":
+        text = action_object.metadata.get("text", "")
+        html_id = action_object.metadata.get("id", "")
+        
+        if text:
+            text_snippet = text.replace(" ", "_").replace("'", "").replace('"', "").lower()
+            return f"{action}_{text_snippet}"
+        elif html_id:
+            return f"{action}_{html_id.lower()}"
+        else:
+            return f"{action}"
+    
+    elif action == "input":
+        placeholder = action_object.metadata.get("placeholder", "")
+        title = action_object.metadata.get("title", "")
+        aria_label = action_object.metadata.get("aria-label", "")
+        html_id = action_object.metadata.get("id", "")
+        
+        if placeholder:
+            identifier = placeholder[:50].replace(" ", "_").replace("'", "").replace('"', "").lower()
+            return f"{action}_{identifier}"
+        elif title:
+            identifier = title[:50].replace(" ", "_").replace("'", "").replace('"', "").lower()
+            return f"{action}_{identifier}"
+        elif aria_label:
+            identifier = aria_label[:50].replace(" ", "_").replace("'", "").replace('"', "").lower()
+            return f"{action}_{identifier}"
+        elif html_id:
+            return f"{action}_{html_id.lower()}"
+        else:
+            return f"{action}"
+    
+    elif action == "scrolled":
+        direction = action_object.metadata.get("scroll_direction", "unknown")
+        return f"{action}_{direction}"
+    
+    return f"{action}_{action_object.element_type}"
+
 def generate_action_string(action_object: ActionObject) -> str:
     action = action_object.action
     element = action_object.element_type
@@ -129,7 +167,7 @@ def generate_action_string(action_object: ActionObject) -> str:
         else:
             return f"User clicked on {element} with id {id}"
 
-def generate_activity_logs(events: List[Dict[str, Any]]):
+def generate_activity_event(events: List[Dict[str, Any]]):
     """
     Generate activity logs from rrweb events.
     
@@ -141,19 +179,19 @@ def generate_activity_logs(events: List[Dict[str, Any]]):
     last_scroll_x = 0
     last_scroll_direction = ""
     
-    for event in events:        
-        #FullSnapshot
+    for event in events: 
+        action_id = ""
+        action_string = ""
         if(event.get('type') == 2):
-            node_map = build_node_map(event['data']['node'])  
+            node_map = build_node_map(event['data']['node'])
           
-        #IncrementalSnapshot    
         elif(event.get('type') == 3):
             data = event.get('data')
-
-            
+            id = data.get('id')
+    
             action = detect_action(event)
             if action:
-                node = node_map.get(data.get('id'))
+                node = node_map.get(id)
                 attributes = extract_attributes(node) if node else {}
                 
                 if action == "input":
@@ -165,12 +203,11 @@ def generate_activity_logs(events: List[Dict[str, Any]]):
                     y = data.get('y', 0)
                     scroll_direction = get_scroll_direction(x, y, last_scroll_x, last_scroll_y)
                     
-                    # Only log if direction changed
                     if scroll_direction != last_scroll_direction and scroll_direction != "no change":
                         attributes['scroll_direction'] = scroll_direction
                         last_scroll_direction = scroll_direction
                     else:
-                        continue  # Skip this event
+                        continue
                     
                     last_scroll_x = x
                     last_scroll_y = y
@@ -182,19 +219,23 @@ def generate_activity_logs(events: List[Dict[str, Any]]):
                     action=action,
                     element_type=node.get('tagName', 'unknown') if node else 'unknown',
                     metadata=attributes,
-                    id=str(data.get('id', ''))
+                    id=str(id)
                 )
                 action_string = generate_action_string(action_object)
-                print(action_string)
+                action_id = generate_action_id(action_object)
                 
         elif(event.get('type') == 4):
-            # Meta events - page loaded
+            action_id = "page_loaded"
             data = event.get('data', {})
             page_url = data.get('href', 'Unknown')
             action_string = f"Page loaded: {page_url}"
-            print(action_string)
-
-
+            
+        if action_string:
+            obj = {
+                "action_id": action_id,
+                "action_string": action_string
+            }
+            print(obj)
 
 # def process_session_replay(session_id: str, events: List[Dict[str, Any]]) -> Dict[str, Any]:
 #     """
