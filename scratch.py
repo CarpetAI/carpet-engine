@@ -6,8 +6,9 @@ from datetime import datetime
 from google.cloud import storage
 from google.oauth2 import service_account
 from google.cloud import firestore
-from app.services.firestore_service import save_session_metadata, get_session_ids
-from app.services.analysis_service import process_session_replay
+from app.services.firestore_service import get_session_ids
+from app.services.analysis_service import generate_activity_event
+from app.services.firebase_service import get_fb_session_events
 
 # Configure logging
 logging.basicConfig(
@@ -208,6 +209,10 @@ def analyze_last_50_sessions(project_id: str = "f91c1c07-2a54-4756-8b2f-9b4fff44
     except Exception as e:
         print(f"Error in analyze_last_50_sessions: {e}")
         return {"status": "error", "message": str(e)}
+    
+def test_generate_activity_event():
+    events = get_fb_session_events("34b49186-2097-4b71-9f67-ab28b5850d65")
+    generate_activity_event(events)
 
 def main():
     # Update all session replays with project ID
@@ -250,7 +255,9 @@ def main():
     #         print("No events found for this session")
 
     # Run analysis on last 50 sessions
-    analyze_last_50_sessions()
+    # analyze_last_50_sessions()
+
+    test_generate_activity_event()
 
 if __name__ == "__main__":
-    main() 
+    main()

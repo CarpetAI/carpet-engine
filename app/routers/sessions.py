@@ -32,15 +32,7 @@ async def save_session_replay_data(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Missing sessionId")
         
-        bucket_name = "session-replays"
-        bucket = get_bucket(bucket_name)
-        blob = bucket.blob(f"sessions/{session_id}.json")
-        
-        if blob.exists():
-            existing_data = json.loads(blob.download_as_text())
-            existing_events = existing_data.get("events", [])
-        else:
-            existing_events = []
+        existing_events = get_fb_session_events(session_id)
         
         all_events = existing_events + new_events
 
