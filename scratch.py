@@ -6,8 +6,9 @@ from datetime import datetime
 from google.cloud import storage
 from google.oauth2 import service_account
 from google.cloud import firestore
-from app.services.firestore_service import save_session_metadata, get_session_ids
-from app.services.analysis_service import process_session_replay
+from app.services.firestore_service import get_session_ids
+from app.services.analysis_service import generate_activity_events
+from app.services.firebase_service import get_fb_session_events
 
 # Configure logging
 logging.basicConfig(
@@ -208,6 +209,106 @@ def analyze_last_50_sessions(project_id: str = "f91c1c07-2a54-4756-8b2f-9b4fff44
     except Exception as e:
         print(f"Error in analyze_last_50_sessions: {e}")
         return {"status": "error", "message": str(e)}
+    
+def test_generate_activity_event():
+    events = get_fb_session_events("34b49186-2097-4b71-9f67-ab28b5850d65")
+    generate_activity_event(events, "34b49186-2097-4b71-9f67-ab28b5850d65", "f91c1c07-2a54-4756-8b2f-9b4fff44da39")
+    
+def process_existing_replays(project_id: str):
+    """
+    Process all existing replays for a given project ID.
+    
+    Args:
+        project_id: The project ID to process sessions for
+        
+    Returns:
+        Dictionary with processing results and statistics
+    """
+    print(f"Starting to process existing replays for project: {project_id}")
+    
+    try:
+        # Get all sessions for this project from Firestore
+        sessions = get_session_ids(project_id)
+        
+        if not sessions:
+            print("No sessions found for this project")
+            return {"status": "no_sessions", "message": "No sessions found"}
+        
+        print(f"Found {len(sessions)} sessions to process")
+        
+        processing_results = {
+            "project_id": project_id,
+            "total_sessions": len(sessions),
+            "successful_analyses": 0,
+            "failed_analyses": 0,
+            "session_results": [],
+            "summary": {
+                "total_events_processed": 0,
+                "total_actions_generated": 0
+            }
+        }
+        
+        for i, session in enumerate(sessions, 1):
+            session_id = session.get("sessionId")
+            print(f"\n[{i}/{len(sessions)}] Processing session: {session_id}")
+            
+            try:
+                # Get events for this session from the database
+                events = get_fb_session_events(session_id)
+                
+                if not events:
+                    print(f"No events found for session {session_id}")
+                    processing_results["failed_analyses"] += 1
+                    processing_results["session_results"].append({
+                        "session_id": session_id,
+                        "status": "no_events",
+                        "message": "No events found"
+                    })
+                    continue
+                
+                print(f"Found {len(events)} events for session {session_id}")
+                
+                # Run analysis using generate_activity_event
+                generate_activity_events(events, session_id, project_id)
+                
+                # Update summary statistics
+                processing_results["successful_analyses"] += 1
+                processing_results["summary"]["total_events_processed"] += len(events)
+                
+                print(f"✓ Analysis successful: {len(events)} events processed")
+                
+                processing_results["session_results"].append({
+                    "session_id": session_id,
+                    "status": "success",
+                    "events_processed": len(events)
+                })
+                
+            except Exception as e:
+                print(f"Error processing session {session_id}: {e}")
+                processing_results["failed_analyses"] += 1
+                processing_results["session_results"].append({
+                    "session_id": session_id,
+                    "status": "error",
+                    "message": str(e)
+                })
+        
+        # Print final summary
+        print(f"\n{'='*50}")
+        print(f"PROCESSING COMPLETE")
+        print(f"{'='*50}")
+        print(f"Project ID: {project_id}")
+        print(f"Total sessions processed: {processing_results['total_sessions']}")
+        print(f"Successful analyses: {processing_results['successful_analyses']}")
+        print(f"Failed analyses: {processing_results['failed_analyses']}")
+        print(f"Total events processed: {processing_results['summary']['total_events_processed']}")
+        print(f"{'='*50}")
+        
+        return processing_results
+        
+    except Exception as e:
+        print(f"Error in process_existing_replays: {e}")
+        return {"status": "error", "message": str(e)}
+    
 
 def main():
     # Update all session replays with project ID
@@ -250,7 +351,10 @@ def main():
     #         print("No events found for this session")
 
     # Run analysis on last 50 sessions
-    analyze_last_50_sessions()
+    # analyze_last_50_sessions()
+
+    # test_generate_activity_event()
+    process_existing_replays("f91c1c07-2a54-4756-8b2f-9b4fff44da39")
 
 if __name__ == "__main__":
-    main() 
+    main()

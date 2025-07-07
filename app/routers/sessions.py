@@ -5,10 +5,8 @@ import json
 import logging
 from datetime import datetime, timedelta
 from app.services.firebase_service import get_fb_session_events, get_bucket
-from app.services.firestore_service import get_session_ids, get_user_projects, create_project, get_project, save_session_metadata, get_project_by_api_key
-from app.services.analysis_service import process_session_replay
-from app.services.rag_service import get_relevant_chunks_for_rag
-
+from app.services.firestore_service import get_session_ids, get_user_projects, create_project, get_project, save_session_metadata, get_project_by_api_key, get_firestore_client, get_action_events_from_action_id
+from app.services.analysis_service import generate_activity_events
 APPLOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["sessions"])
@@ -51,7 +49,8 @@ async def save_session_replay_data(request: Request):
                 first_dt = datetime.fromtimestamp(first_ts / 1000)
                 last_dt = datetime.fromtimestamp(last_ts / 1000)
                 session_duration = last_dt - first_dt
-                if session_duration > timedelta(minutes=30):
+                if session_duration > timedelta(minutes=60):
+                    APPLOGGER.info(f"Session {session_id} exceeds 30 minutes. Refusing to save.")
                     return JSONResponse(content={
                         "status": "too_long",
                         "message": "Session exceeds 30 minutes",
@@ -70,9 +69,9 @@ async def save_session_replay_data(request: Request):
         
         gcs_url = f"gs://{bucket_name}/sessions/{session_id}.json"
         events = session_json.get("events", [])
+        generate_activity_events(new_events, session_id, project_id)
         success = save_session_metadata(session_id, gcs_url, project_id)
-        # process_session_replay(session_id, events)
-        
+            
         if success:
             return JSONResponse(content={"status": "success", "file": gcs_url})
         else:
@@ -157,42 +156,87 @@ async def get_session_events(session_id: str):
         APPLOGGER.error(f"Error getting session events for {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to get session events")
 
+@router.get("/projects/{project_id}/action-ids")
+async def get_project_action_ids(project_id: str):
+    try:
+        APPLOGGER.info(f"Getting action IDs for project {project_id}")
+        
+        db = get_firestore_client()
+        action_ids_ref = db.collection("projects").document(project_id).collection("action_ids")
+        
+        docs = action_ids_ref.stream()
+        
+        action_ids = []
+        for doc in docs:
+            doc_data = doc.to_dict()
+            action_ids.append({
+                "id": doc.id,
+                "count": doc_data.get("count", 0)
+            })
+        
+        APPLOGGER.info(f"Retrieved {len(action_ids)} action IDs for project {project_id}")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": f"Retrieved {len(action_ids)} action IDs",
+            "project_id": project_id,
+            "action_ids": action_ids
+        })
+        
+    except Exception as e:
+        APPLOGGER.error(f"Error getting action IDs for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get action IDs")
+
+ 
+
 @router.post("/rag/query")
 async def rag_query_endpoint(request: Dict[str, Any]):
     try:
-        question = request.get("question")
-        session_id = request.get("session_id")
-        top_k = request.get("top_k", 10)
+        action_id = request.get("action_id")
+        project_id = request.get("project_id")
         
-        APPLOGGER.info(f"RAG query endpoint called with question: {question}, session_id: {session_id}, top_k: {top_k}")
+        APPLOGGER.info(f"RAG query endpoint called with action_id: {action_id}, project_id: {project_id}")
         
-        if not question:
-            raise HTTPException(status_code=400, detail="Question is required")
+        if not action_id:
+            raise HTTPException(status_code=400, detail="Action ID is required")
+        if not project_id:
+            raise HTTPException(status_code=400, detail="Project ID is required")
         
-        relevant_chunks = get_relevant_chunks_for_rag(question, session_id, top_k)
+        result = get_action_events_from_action_id(project_id, action_id)
         
-        if not relevant_chunks:
+        if not result:
             return JSONResponse(content={
-                "context": "No relevant chunks found",
-                "relevant_chunks": [],
-                "success": True
+                "success": False,
+                "message": f"No events found with action_id {action_id}",
+                "target_events": [],
+                "context_events": []
             })
         
-        context_parts = []
-        for i, chunk in enumerate(relevant_chunks, 1):
-            session_id = chunk.get('session_id', 'unknown')
-            relevance = chunk['relevance_score']
-            data = chunk['text']
-            context_parts.append(f"Chunk {i}: {{session_id: {session_id}, relevance: {relevance:.3f}, data: {data}}}")
+        target_events = result["target_events"]
+        context_events_by_session = result["context_events_by_session"]
+        session_ids = result["session_ids"]
         
-        context = "\n\n".join(context_parts)
+        total_context_events = sum(len(events) for events in context_events_by_session.values())
         
-        return JSONResponse(content={
-            "context": context,
-            "relevant_chunks": relevant_chunks,
-            "success": True
-        })
+        response_data = {
+            "success": True,
+            "message": f"Retrieved {len(target_events)} events with action_id {action_id} and {total_context_events} context events across {len(context_events_by_session)} sessions",
+            "target_events": target_events,
+            "context_events_by_session": context_events_by_session,
+            "session_ids": session_ids,
+            "action_id": action_id,
+            "summary": {
+                "total_target_events": len(target_events),
+                "total_context_events": total_context_events,
+                "sessions_involved": len(session_ids),
+                "sessions_with_context": len(context_events_by_session),
+                "action_id": action_id
+            }
+        }
+        
+        return JSONResponse(content=response_data)
         
     except Exception as e:
         APPLOGGER.error(f"Error in RAG query: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to process RAG query") 
+       
