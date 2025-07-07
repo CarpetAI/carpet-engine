@@ -6,7 +6,8 @@ from openai import OpenAI
 from pinecone.grpc import PineconeGRPC as Pinecone
 from pinecone import ServerlessSpec
 
-from app.services.firebase_service import get_bucket
+from app.services.firebase_service import get_fb_session_events
+from app.services.firestore_service import save_action_id, save_action_events
 
 APPLOGGER = logging.getLogger(__name__)
 
@@ -111,17 +112,75 @@ def should_skip_click(node: Dict[str, Any], attributes: Dict[str, str]) -> bool:
 def generate_action_id(action_object: ActionObject) -> str:
     action = action_object.action
     
+    def clean_text(text: str) -> str:
+        """Clean text to create a valid action ID by removing special characters and emojis"""
+        import re
+        # Remove emojis and special characters, keep only alphanumeric and spaces
+        cleaned = re.sub(r'[^\w\s]', '', text)
+        # Trim whitespace, replace spaces with underscores and convert to lowercase
+        return cleaned.strip().replace(" ", "_").lower()
+    
     if action == "clicked":
         text = action_object.metadata.get("text", "")
         html_id = action_object.metadata.get("id", "")
+        aria_label = action_object.metadata.get("aria-label", "")
+        title = action_object.metadata.get("title", "")
+        href = action_object.metadata.get("href", "")
+        element_type = action_object.element_type.lower()
         
-        if text:
-            text_snippet = text.replace(" ", "_").replace("'", "").replace('"', "").lower()
-            return f"{action}_{text_snippet}"
-        elif html_id:
-            return f"{action}_{html_id.lower()}"
+        if element_type == "img":
+            aria_label = action_object.metadata.get("aria-label", "")
+            title = action_object.metadata.get("title", "")
+            
+            if aria_label:
+                return f"{action}_image_{clean_text(aria_label)}"
+            elif title:
+                return f"{action}_image_{clean_text(title)}"
+            else:
+                return f"{action}_image"
+        elif element_type == "button" and text:
+            return f"{action}_{clean_text(text)}"
+        elif element_type == "button":
+            aria_label = action_object.metadata.get("aria-label", "")
+            html_id = action_object.metadata.get("id", "")
+            title = action_object.metadata.get("title", "")
+            
+            if aria_label:
+                return f"{action}_button_{clean_text(aria_label)}"
+            elif html_id:
+                return f"{action}_button_{clean_text(html_id)}"
+            elif title:
+                return f"{action}_button_{clean_text(title)}"
+            else:
+                return f"{action}_button"
+        elif element_type == "a" and href:
+            aria_label = action_object.metadata.get("aria-label", "")
+            if aria_label:
+                return f"{action}_link_{clean_text(aria_label)}"
+            elif text:
+                return f"{action}_link_{clean_text(text)}"
+            else:
+                return f"{action}_link"
+        elif element_type == "a":
+            return f"{action}_link"
+        elif element_type == "input":
+            placeholder = action_object.metadata.get("placeholder", "")
+            aria_label = action_object.metadata.get("aria-label", "")
+            html_id = action_object.metadata.get("id", "")
+            title = action_object.metadata.get("title", "")
+            
+            if placeholder:
+                return f"{action}_input_{clean_text(placeholder)}"
+            elif aria_label:
+                return f"{action}_input_{clean_text(aria_label)}"
+            elif html_id:
+                return f"{action}_input_{clean_text(html_id)}"
+            elif title:
+                return f"{action}_input_{clean_text(title)}"
+            else:
+                return f"{action}_input"
         else:
-            return f"{action}"
+            return f"{action}_element"
     
     elif action == "input":
         placeholder = action_object.metadata.get("placeholder", "")
@@ -130,24 +189,19 @@ def generate_action_id(action_object: ActionObject) -> str:
         html_id = action_object.metadata.get("id", "")
         
         if placeholder:
-            identifier = placeholder[:50].replace(" ", "_").replace("'", "").replace('"', "").lower()
-            return f"{action}_{identifier}"
-        elif title:
-            identifier = title[:50].replace(" ", "_").replace("'", "").replace('"', "").lower()
-            return f"{action}_{identifier}"
+            return f"{action}_with_placeholder_{clean_text(placeholder)}"
         elif aria_label:
-            identifier = aria_label[:50].replace(" ", "_").replace("'", "").replace('"', "").lower()
-            return f"{action}_{identifier}"
+            return f"{action}_with_aria_label_{clean_text(aria_label)}"
         elif html_id:
-            return f"{action}_{html_id.lower()}"
+            return f"{action}_with_id_{clean_text(html_id)}"
+        elif title:
+            return f"{action}_with_title_{clean_text(title)}"
         else:
-            return f"{action}"
+            return f"{action}_input"
     
     elif action == "scrolled":
         direction = action_object.metadata.get("scroll_direction", "unknown")
         return f"{action}_{direction}"
-    
-    return f"{action}_{action_object.element_type}"
 
 def generate_action_string(action_object: ActionObject) -> str:
     action = action_object.action
@@ -167,7 +221,7 @@ def generate_action_string(action_object: ActionObject) -> str:
         else:
             return f"User clicked on {element} with id {id}"
 
-def generate_activity_event(events: List[Dict[str, Any]]):
+def generate_activity_events(events: List[Dict[str, Any]], session_id: str, project_id: str):
     """
     Generate activity logs from rrweb events.
     
@@ -178,10 +232,12 @@ def generate_activity_event(events: List[Dict[str, Any]]):
     last_scroll_y = 0
     last_scroll_x = 0
     last_scroll_direction = ""
-    
+    event_logs = []
     for event in events: 
         action_id = ""
         action_string = ""
+        event_log = {}
+        event_log["timestamp"] = event.get('timestamp')
         if(event.get('type') == 2):
             node_map = build_node_map(event['data']['node'])
           
@@ -217,12 +273,17 @@ def generate_activity_event(events: List[Dict[str, Any]]):
                 
                 action_object = ActionObject(
                     action=action,
-                    element_type=node.get('tagName', 'unknown') if node else 'unknown',
+                    element_type=node.get('tagName', '') if node else '',
                     metadata=attributes,
                     id=str(id)
                 )
                 action_string = generate_action_string(action_object)
                 action_id = generate_action_id(action_object)
+                event_log['element_type'] = action_object.element_type
+                event_log['local_id'] = action_object.id
+                if action_id:
+                    save_action_id(action_id, project_id)
+                    APPLOGGER.info(f"Saved action ID: {action_id}")
                 
         elif(event.get('type') == 4):
             action_id = "page_loaded"
@@ -230,12 +291,13 @@ def generate_activity_event(events: List[Dict[str, Any]]):
             page_url = data.get('href', 'Unknown')
             action_string = f"Page loaded: {page_url}"
             
-        if action_string:
-            obj = {
-                "action_id": action_id,
-                "action_string": action_string
-            }
-            print(obj)
+        if action_string and event_log.get('element_type') and action_id:
+            event_log["action_id"] = action_id
+            event_log["action_string"] = action_string
+            event_log["session_id"] = session_id
+            event_logs.append(event_log)
+    save_action_events(event_logs, project_id)
+    APPLOGGER.info(f"Saved {len(event_logs)} events")
 
 # def process_session_replay(session_id: str, events: List[Dict[str, Any]]) -> Dict[str, Any]:
 #     """
