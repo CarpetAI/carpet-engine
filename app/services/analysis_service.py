@@ -7,9 +7,10 @@ from pinecone.grpc import PineconeGRPC as Pinecone
 from pinecone import ServerlessSpec
 
 from app.services.firebase_service import get_fb_session_events
-from app.services.firestore_service import save_action_id, save_action_events
+from app.services.firestore_service import save_action_events
 
 APPLOGGER = logging.getLogger(__name__)
+
 
 class ActionObject(BaseModel):
     action: str
@@ -17,68 +18,73 @@ class ActionObject(BaseModel):
     metadata: Dict[str, Any]
     id: str
 
-def build_node_map(node, node_map=None):  
-    if node_map is None:  
-        node_map = {}  
-      
-    if 'id' in node:  
-        node_map[node['id']] = node  
-      
-    if 'childNodes' in node:  
-        for child in node['childNodes']:  
-            build_node_map(child, node_map)  
-      
-    return node_map  
+
+def build_node_map(node, node_map=None):
+    if node_map is None:
+        node_map = {}
+
+    if "id" in node:
+        node_map[node["id"]] = node
+
+    if "childNodes" in node:
+        for child in node["childNodes"]:
+            build_node_map(child, node_map)
+
+    return node_map
+
 
 def extract_text_content(node: Dict[str, Any]) -> str:
     text_parts = []
-    
-    if 'textContent' in node and node['textContent']:
-        text_parts.append(node['textContent'].strip())
-    
-    if 'childNodes' in node:
-        for child in node['childNodes']:
+
+    if "textContent" in node and node["textContent"]:
+        text_parts.append(node["textContent"].strip())
+
+    if "childNodes" in node:
+        for child in node["childNodes"]:
             child_text = extract_text_content(child)
             if child_text:
                 text_parts.append(child_text)
-    
-    full_text = ' '.join(text_parts)
-    cleaned_text = ' '.join(full_text.split())
-    
+
+    full_text = " ".join(text_parts)
+    cleaned_text = " ".join(full_text.split())
+
     return cleaned_text
 
+
 def extract_attributes(node: Dict[str, Any]) -> Dict[str, str]:
-    attributes = node.get('attributes', {})
-    
+    attributes = node.get("attributes", {})
+
     semantic_attrs = {}
-    semantic_keys = [
-        'id', 'placeholder', 'title', 'alt', 'aria-label', 'href'
-    ]
-    
+    semantic_keys = ["id", "placeholder", "title", "alt", "aria-label", "href"]
+
     for key, value in attributes.items():
         if key in semantic_keys and value:
             semantic_attrs[key] = value
-    
+
     text_content = extract_text_content(node)
     if text_content:
-        semantic_attrs['text'] = text_content
-    
+        semantic_attrs["text"] = text_content
+
     return semantic_attrs
 
+
 def detect_action(event: Dict[str, Any]) -> str:
-    data = event.get('data')
-    if data.get('source') == 2 and data.get('type') == 2: #Click event
+    data = event.get("data")
+    if data.get("source") == 2 and data.get("type") == 2:  # Click event
         return "clicked"
-    elif data.get('source') == 5: #Input event
+    elif data.get("source") == 5:  # Input event
         return "input"
-    elif data.get('source') == 3: #Scroll event
+    elif data.get("source") == 3:  # Scroll event
         return "scrolled"
     return ""
 
-def get_scroll_direction(current_x: int, current_y: int, last_x: int, last_y: int) -> str:
+
+def get_scroll_direction(
+    current_x: int, current_y: int, last_x: int, last_y: int
+) -> str:
     x_change = current_x - last_x
     y_change = current_y - last_y
-    
+
     if abs(x_change) > abs(y_change):
         if x_change > 0:
             return "right"
@@ -94,32 +100,70 @@ def get_scroll_direction(current_x: int, current_y: int, last_x: int, last_y: in
         else:
             return "no change"
 
+
 def should_skip_click(node: Dict[str, Any], attributes: Dict[str, str]) -> bool:
     if not node:
         return True
-    
-    tag_name = node.get('tagName', '').lower()
-    generic_tags = ['div', 'span', 'section', 'article', 'main', 'aside', 'header', 'footer']
-    
+
+    tag_name = node.get("tagName", "").lower()
+    generic_tags = [
+        "div",
+        "span",
+        "section",
+        "article",
+        "main",
+        "aside",
+        "header",
+        "footer",
+    ]
+
     if tag_name in generic_tags:
-        has_text = 'text' in attributes and attributes['text']
-        has_meaningful_attrs = any(key in attributes for key in ['id', 'placeholder', 'title', 'alt', 'aria-label', 'href'])
-        
+        has_text = "text" in attributes and attributes["text"]
+        has_meaningful_attrs = any(
+            key in attributes
+            for key in ["id", "placeholder", "title", "alt", "aria-label", "href"]
+        )
+
         return not (has_text or has_meaningful_attrs)
-    
+
     return False
+
+
+def clean_text(text: str) -> str:
+    """Clean text to create a valid action ID by removing special characters and emojis"""
+    import re
+
+    # Remove emojis and special characters, keep only alphanumeric and spaces
+    cleaned = re.sub(r"[^\w\s]", "", text)
+    # Trim whitespace, replace spaces with underscores and convert to lowercase
+    return cleaned.strip().replace(" ", "_").lower()
+
+
+def clean_url(url: str) -> str:
+    """Extract domain and first endpoint from URL"""
+    from urllib.parse import urlparse
+    
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        path = parsed.path.strip('/')
+        
+        if not domain:
+            return "unknown"
+        
+        if not path:
+            return domain
+        
+        first_endpoint = path.split('/')[0]
+        return f"{domain}/{first_endpoint}"
+        
+    except Exception:
+        return "unknown"
+
 
 def generate_action_id(action_object: ActionObject) -> str:
     action = action_object.action
-    
-    def clean_text(text: str) -> str:
-        """Clean text to create a valid action ID by removing special characters and emojis"""
-        import re
-        # Remove emojis and special characters, keep only alphanumeric and spaces
-        cleaned = re.sub(r'[^\w\s]', '', text)
-        # Trim whitespace, replace spaces with underscores and convert to lowercase
-        return cleaned.strip().replace(" ", "_").lower()
-    
+
     if action == "clicked":
         text = action_object.metadata.get("text", "")
         html_id = action_object.metadata.get("id", "")
@@ -127,11 +171,11 @@ def generate_action_id(action_object: ActionObject) -> str:
         title = action_object.metadata.get("title", "")
         href = action_object.metadata.get("href", "")
         element_type = action_object.element_type.lower()
-        
+
         if element_type == "img":
             aria_label = action_object.metadata.get("aria-label", "")
             title = action_object.metadata.get("title", "")
-            
+
             if aria_label:
                 return f"{action}_image_{clean_text(aria_label)}"
             elif title:
@@ -144,7 +188,7 @@ def generate_action_id(action_object: ActionObject) -> str:
             aria_label = action_object.metadata.get("aria-label", "")
             html_id = action_object.metadata.get("id", "")
             title = action_object.metadata.get("title", "")
-            
+
             if aria_label:
                 return f"{action}_button_{clean_text(aria_label)}"
             elif html_id:
@@ -168,7 +212,7 @@ def generate_action_id(action_object: ActionObject) -> str:
             aria_label = action_object.metadata.get("aria-label", "")
             html_id = action_object.metadata.get("id", "")
             title = action_object.metadata.get("title", "")
-            
+
             if placeholder:
                 return f"{action}_input_{clean_text(placeholder)}"
             elif aria_label:
@@ -181,13 +225,13 @@ def generate_action_id(action_object: ActionObject) -> str:
                 return f"{action}_input"
         else:
             return f"{action}_element"
-    
+
     elif action == "input":
         placeholder = action_object.metadata.get("placeholder", "")
         title = action_object.metadata.get("title", "")
         aria_label = action_object.metadata.get("aria-label", "")
         html_id = action_object.metadata.get("id", "")
-        
+
         if placeholder:
             return f"{action}_with_placeholder_{clean_text(placeholder)}"
         elif aria_label:
@@ -198,16 +242,17 @@ def generate_action_id(action_object: ActionObject) -> str:
             return f"{action}_with_title_{clean_text(title)}"
         else:
             return f"{action}_input"
-    
+
     elif action == "scrolled":
         direction = action_object.metadata.get("scroll_direction", "unknown")
         return f"{action}_{direction}"
+
 
 def generate_action_string(action_object: ActionObject) -> str:
     action = action_object.action
     element = action_object.element_type
     id = action_object.id
-    
+
     if action == "input":
         input_value = action_object.metadata.get("input_value", "")
         return f"User input '{input_value}' on {element} with id {id}"
@@ -221,92 +266,112 @@ def generate_action_string(action_object: ActionObject) -> str:
         else:
             return f"User clicked on {element} with id {id}"
 
-def generate_activity_events(events: List[Dict[str, Any]], session_id: str, project_id: str):
+
+def generate_activity_events(
+    events: List[Dict[str, Any]], session_id: str, project_id: str
+):
     """
     Generate activity logs from rrweb events.
-    
+
     Args:
         events: List of rrweb event dictionaries with keys: "type", "timestamp", "data"
     """
-    node_map = {}  
+    node_map = {}
     last_scroll_y = 0
     last_scroll_x = 0
     last_scroll_direction = ""
     event_logs = []
-    for event in events: 
+    action_id_counter = {}
+    from app.services.firestore_service import save_action_id_batch
+    
+    for event in events:
         action_id = ""
         action_string = ""
         event_log = {}
-        event_log["timestamp"] = event.get('timestamp')
-        if(event.get('type') == 2):
-            node_map = build_node_map(event['data']['node'])
-          
-        elif(event.get('type') == 3):
-            data = event.get('data')
-            id = data.get('id')
-    
+        event_log["timestamp"] = event.get("timestamp")
+        if event.get("type") == 2:
+            node_map = build_node_map(event["data"]["node"])
+
+        elif event.get("type") == 3:
+            data = event.get("data")
+            id = data.get("id")
+
             action = detect_action(event)
             if action:
                 node = node_map.get(id)
                 attributes = extract_attributes(node) if node else {}
-                
+
                 if action == "input":
-                    input_value = data.get('text', '')
+                    input_value = data.get("text", "")
                     if input_value:
-                        attributes['input_value'] = input_value
+                        attributes["input_value"] = input_value
                 elif action == "scrolled":
-                    x = data.get('x', 0)
-                    y = data.get('y', 0)
-                    scroll_direction = get_scroll_direction(x, y, last_scroll_x, last_scroll_y)
-                    
-                    if scroll_direction != last_scroll_direction and scroll_direction != "no change":
-                        attributes['scroll_direction'] = scroll_direction
+                    x = data.get("x", 0)
+                    y = data.get("y", 0)
+                    scroll_direction = get_scroll_direction(
+                        x, y, last_scroll_x, last_scroll_y
+                    )
+
+                    if (
+                        scroll_direction != last_scroll_direction
+                        and scroll_direction != "no change"
+                    ):
+                        attributes["scroll_direction"] = scroll_direction
                         last_scroll_direction = scroll_direction
                     else:
                         continue
-                    
+
                     last_scroll_x = x
                     last_scroll_y = y
-                
+
                 if action == "clicked" and should_skip_click(node, attributes):
                     continue
-                
+
                 action_object = ActionObject(
                     action=action,
-                    element_type=node.get('tagName', '') if node else '',
+                    element_type=node.get("tagName", "") if node else "",
                     metadata=attributes,
-                    id=str(id)
+                    id=str(id),
                 )
                 action_string = generate_action_string(action_object)
                 action_id = generate_action_id(action_object)
-                event_log['element_type'] = action_object.element_type
-                event_log['local_id'] = action_object.id
+                event_log["element_type"] = action_object.element_type
+                event_log["local_id"] = action_object.id
                 if action_id:
-                    save_action_id(action_id, project_id)
-                    APPLOGGER.info(f"Saved action ID: {action_id}")
-                
-        elif(event.get('type') == 4):
-            action_id = "page_loaded"
-            data = event.get('data', {})
-            page_url = data.get('href', 'Unknown')
-            action_string = f"Page loaded: {page_url}"
-            
-        if action_string and event_log.get('element_type') and action_id:
+                    action_id_counter[action_id] = action_id_counter.get(action_id, 0) + 1
+
+        elif event.get("type") == 4:
+            data = event.get("data", {})
+            page_url = data.get("href", "Unknown")
+            clean_page_url = clean_url(page_url)
+            action_id = "page_loaded_" + clean_text(clean_page_url)
+            action_string = f"Page loaded: {clean_page_url}"
+            event_log["element_type"] = "page"
+            event_log["local_id"] = "page_load"
+            action_id_counter[action_id] = action_id_counter.get(action_id, 0) + 1
+
+        if action_string and action_id:
             event_log["action_id"] = action_id
             event_log["action_string"] = action_string
             event_log["session_id"] = session_id
             event_logs.append(event_log)
+    
+    if action_id_counter:
+        save_action_id_batch(action_id_counter, project_id)
+        APPLOGGER.info(f"Saved {len(action_id_counter)} action IDs in batch")
+    
     save_action_events(event_logs, project_id)
     APPLOGGER.info(f"Saved {len(event_logs)} events")
+
 
 # def process_session_replay(session_id: str, events: List[Dict[str, Any]]) -> Dict[str, Any]:
 #     """
 #     Process session replay events through the full pipeline.
-    
+
 #     Args:
 #         session_id: The session ID to process
 #         events: List of rrweb events
-        
+
 #     Returns:
 #         Dictionary with processing results and statistics
 #     """
@@ -320,11 +385,11 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #                 "message": "No actions extracted from events",
 #                 "chunks": []
 #             }
-        
+
 #         chunks = chunk_session_actions(action_logs, session_id)
 #         embedded_chunks = embed_chunks(chunks)
 #         stored_count = store_chunks_in_pinecone(embedded_chunks)
-        
+
 #         return {
 #             "session_id": session_id,
 #             "status": "success",
@@ -334,7 +399,7 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #             "stored_chunks": stored_count,
 #             "chunks": embedded_chunks
 #         }
-        
+
 #     except Exception as e:
 #         APPLOGGER.error(f"Error processing session replay {session_id}: {e}")
 #         return {
@@ -348,32 +413,32 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 # def store_chunks_in_pinecone(chunks: List[Dict[str, Any]], index_name: str = "session-replays") -> int:
 #     """
 #     Store embedded chunks in Pinecone vector database.
-    
+
 #     Args:
 #         chunks: List of embedded chunk dictionaries
 #         index_name: Name of the Pinecone index to use
-        
+
 #     Returns:
 #         Number of chunks successfully stored
 #     """
 #     if not chunks:
 #         return 0
-    
+
 #     try:
 #         api_key = os.getenv("PINECONE_API_KEY")
 #         if not api_key:
 #             APPLOGGER.error("PINECONE_API_KEY not found in environment variables")
 #             return 0
-        
+
 #         pc = Pinecone(api_key=api_key)
-        
+
 #         # Create index if it doesn't exist
 #         if not pc.has_index(index_name):
 #             APPLOGGER.info(f"Creating Pinecone index: {index_name}")
 #             pc.create_index(
 #                 name=index_name,
 #                 vector_type="dense",
-#                 dimension=1536, 
+#                 dimension=1536,
 #                 metric="cosine",
 #                 spec=ServerlessSpec(
 #                     cloud="aws",
@@ -382,18 +447,18 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #                 deletion_protection="disabled",
 #                 tags={"environment": "development"}
 #             )
-        
+
 #         index = pc.Index(index_name)
-        
+
 #         # Prepare vectors for upsert
 #         vectors = []
 #         for chunk in chunks:
 #             if "embedding" not in chunk:
 #                 APPLOGGER.warning(f"Chunk {chunk.get('chunk_index', 'unknown')} has no embedding, skipping")
 #                 continue
-            
+
 #             vector_id = f"{chunk['session_id']}_{chunk['chunk_index']}"
-            
+
 #             metadata = {
 #                 "session_id": chunk["session_id"],
 #                 "chunk_index": chunk["chunk_index"],
@@ -405,21 +470,21 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #                 "chunk_type": chunk["chunk_type"],
 #                 "text": chunk["text"]
 #             }
-            
+
 #             vectors.append({
 #                 "id": vector_id,
 #                 "values": chunk["embedding"],
 #                 "metadata": metadata
 #             })
-        
+
 #         if not vectors:
 #             APPLOGGER.warning("No valid vectors to store")
 #             return 0
-        
+
 #         # Upsert vectors in batches
 #         batch_size = 100
 #         stored_count = 0
-        
+
 #         for i in range(0, len(vectors), batch_size):
 #             batch = vectors[i:i + batch_size]
 #             try:
@@ -428,10 +493,10 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #                 APPLOGGER.info(f"Stored batch {i//batch_size + 1}: {len(batch)} vectors")
 #             except Exception as e:
 #                 APPLOGGER.error(f"Error storing batch {i//batch_size + 1}: {e}")
-        
+
 #         APPLOGGER.info(f"Successfully stored {stored_count} chunks in Pinecone")
 #         return stored_count
-        
+
 #     except Exception as e:
 #         APPLOGGER.error(f"Error storing chunks in Pinecone: {e}")
 #         return 0
@@ -440,29 +505,29 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 # def embed_chunks(chunks: List[Dict[str, Any]], model: str = "text-embedding-3-small") -> List[Dict[str, Any]]:
 #     """
 #     Embed session replay chunks using OpenAI's embedding model.
-    
+
 #     Args:
 #         chunks: List of chunk dictionaries with text content
 #         model: OpenAI embedding model to use
-        
+
 #     Returns:
 #         List of chunks with embeddings added
 #     """
 #     if not chunks:
 #         return []
-    
+
 #     try:
 #         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 #         texts = [chunk["text"] for chunk in chunks]
-        
+
 #         APPLOGGER.info(f"Embedding {len(texts)} chunks using {model}")
-        
+
 #         response = client.embeddings.create(
 #             model=model,
 #             input=texts,
 #             encoding_format="float"
 #         )
-        
+
 #         embedded_chunks = []
 #         for i, chunk in enumerate(chunks):
 #             embedded_chunk = chunk.copy()
@@ -470,10 +535,10 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #             embedded_chunk["embedding_model"] = model
 #             embedded_chunk["embedding_dimensions"] = len(response.data[i].embedding)
 #             embedded_chunks.append(embedded_chunk)
-        
+
 #         APPLOGGER.info(f"Successfully embedded {len(embedded_chunks)} chunks")
 #         return embedded_chunks
-        
+
 #     except Exception as e:
 #         APPLOGGER.error(f"Error embedding chunks: {e}")
 #         return chunks
@@ -482,51 +547,51 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 # def chunk_session_actions(action_logs: List[ActionLog], session_id: str, max_chunk_size: int = 500, max_actions_per_chunk: int = 10) -> List[Dict[str, Any]]:
 #     """
 #     Chunk session action logs into semantic units for processing.
-    
+
 #     Args:
 #         action_logs: List of action log objects to chunk
 #         session_id: The session ID for metadata
 #         max_chunk_size: Maximum tokens per chunk (approximate)
 #         max_actions_per_chunk: Maximum actions per chunk
-        
+
 #     Returns:
 #         List of chunk dictionaries with metadata ready for embedding
 #     """
 #     if not action_logs:
 #         return []
-    
+
 #     chunks = []
 #     current_chunk_actions = []
 #     current_chunk_size = 0
-    
+
 #     for action in action_logs:
 #         action_text = f"{action.action}"
 #         if action.elements_on_screen:
 #             action_text += f" Elements: {', '.join(action.elements_on_screen)}"
-        
+
 #         action_tokens = len(action_text) // 4
-        
+
 #         would_exceed_size = current_chunk_size + action_tokens > max_chunk_size
 #         would_exceed_actions = len(current_chunk_actions) >= max_actions_per_chunk
-        
+
 #         if (would_exceed_size or would_exceed_actions) and current_chunk_actions:
 #             chunk = create_chunk_from_actions(current_chunk_actions, session_id, len(chunks))
 #             chunks.append(chunk)
-            
+
 #             current_chunk_actions = []
 #             current_chunk_size = 0
-        
+
 #         current_chunk_actions.append(action)
 #         current_chunk_size += action_tokens
-    
+
 #     if current_chunk_actions:
 #         chunk = create_chunk_from_actions(current_chunk_actions, session_id, len(chunks))
 #         chunks.append(chunk)
-    
+
 #     for chunk in chunks:
 #         chunk["total_chunks"] = len(chunks)
 #         chunk["chunk_type"] = "session_replay"
-    
+
 #     APPLOGGER.info(f"Created {len(chunks)} chunks for session {session_id}")
 #     return chunks
 
@@ -534,12 +599,12 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 # def create_chunk_from_actions(actions: List[ActionLog], session_id: str, chunk_index: int) -> Dict[str, Any]:
 #     """
 #     Create a chunk dictionary from a list of actions.
-    
+
 #     Args:
 #         actions: List of actions to include in this chunk
 #         session_id: The session ID for metadata
 #         chunk_index: The index of this chunk
-        
+
 #     Returns:
 #         Chunk dictionary with text and metadata
 #     """
@@ -548,17 +613,17 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #         timestamp_str = format_timestamp(action.timestamp)
 #         action_line = f"{i}. [{timestamp_str}] {action.action}"
 #         lines.append(action_line)
-        
+
 #         if action.elements_on_screen and action.elements_on_screen != ["No significant change from previous state"]:
 #             elements_text = "; ".join(action.elements_on_screen)
 #             lines.append(f"   Elements on screen: {elements_text}")
-    
+
 #     chunk_text = "\n".join(lines)
-    
+
 #     start_time = actions[0].timestamp if actions else 0
 #     end_time = actions[-1].timestamp if actions else 0
 #     duration = end_time - start_time
-    
+
 #     return {
 #         "session_id": session_id,
 #         "chunk_index": chunk_index,
@@ -591,5 +656,3 @@ def generate_activity_events(events: List[Dict[str, Any]], session_id: str, proj
 #         hours = ms // 3600000
 #         minutes = (ms % 3600000) // 60000
 #         return f"{hours}h {minutes}m"
-
-

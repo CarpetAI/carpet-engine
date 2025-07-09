@@ -213,22 +213,28 @@ def get_project_by_api_key(api_key: str):
         return None
 
 
-def save_action_id(action_id: str, project_id: str):
+def save_action_id_batch(action_ids: Dict[str, int], project_id: str):
     try:
         db = get_firestore_client()
-        doc_ref = db.collection("projects").document(project_id).collection(
-            "action_ids"
-        ).document(action_id)
+        batch = db.batch()
         
-        doc = doc_ref.get()
-        if doc.exists:
-            current_count = doc.to_dict().get('count', 0)
-            doc_ref.update({'count': current_count + 1})
-        else:
-            doc_ref.set({'count': 1})
+        for action_id, count in action_ids.items():
+            doc_ref = db.collection("projects").document(project_id).collection(
+                "action_ids"
+            ).document(action_id)
+            
+            doc = doc_ref.get()
+            if doc.exists:
+                current_count = doc.to_dict().get('count', 0)
+                batch.update(doc_ref, {'count': current_count + count})
+            else:
+                batch.set(doc_ref, {'count': count})
+        
+        batch.commit()
+        return True
             
     except Exception as e:
-        APPLOGGER.error(f"Error saving action ID: {e}")
+        APPLOGGER.error(f"Error saving action IDs in batch: {e}")
         return False
 
 
@@ -254,9 +260,7 @@ def save_action_events(events: Dict[str, Any], project_id: str):
             
             batch.commit()
             total_saved += len(batch_events)
-            APPLOGGER.info(f"Saved batch {i//batch_size + 1}: {len(batch_events)} events")
         
-        APPLOGGER.info(f"Successfully saved {total_saved}/{total_events} action events in {len(events_list)//batch_size + 1} batches for project {project_id}")
         return True
     except Exception as e:
         APPLOGGER.error(f"Error saving action events in batch: {e}")
