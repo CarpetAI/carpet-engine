@@ -212,7 +212,7 @@ def analyze_last_50_sessions(project_id: str = "f91c1c07-2a54-4756-8b2f-9b4fff44
     
 def test_generate_activity_event():
     events = get_fb_session_events("34b49186-2097-4b71-9f67-ab28b5850d65")
-    generate_activity_event(events, "34b49186-2097-4b71-9f67-ab28b5850d65", "f91c1c07-2a54-4756-8b2f-9b4fff44da39")
+    generate_activity_events(events, "34b49186-2097-4b71-9f67-ab28b5850d65", "f91c1c07-2a54-4756-8b2f-9b4fff44da39")
     
 def process_existing_replays(project_id: str):
     """
@@ -228,8 +228,7 @@ def process_existing_replays(project_id: str):
     
     try:
         # Get all sessions for this project from Firestore
-        sessions = get_session_ids(project_id)
-        
+        sessions = get_session_ids(project_id)[:10]
         if not sessions:
             print("No sessions found for this project")
             return {"status": "no_sessions", "message": "No sessions found"}

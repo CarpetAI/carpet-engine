@@ -1,13 +1,9 @@
-import os
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from pydantic import BaseModel
-from openai import OpenAI
-from pinecone.grpc import PineconeGRPC as Pinecone
-from pinecone import ServerlessSpec
 
-from app.services.firebase_service import get_fb_session_events
-from app.services.firestore_service import save_action_events
+from app.services.firestore_service import save_action_events, save_action_id_batch
+from app.services.intelligence_service import generate_event_log_from_events
 
 APPLOGGER = logging.getLogger(__name__)
 
@@ -142,110 +138,23 @@ def clean_text(text: str) -> str:
 def clean_url(url: str) -> str:
     """Extract domain and first endpoint from URL"""
     from urllib.parse import urlparse
-    
+
     try:
         parsed = urlparse(url)
         domain = parsed.netloc
-        path = parsed.path.strip('/')
-        
+        path = parsed.path.strip("/")
+
         if not domain:
             return "unknown"
-        
+
         if not path:
             return domain
-        
-        first_endpoint = path.split('/')[0]
+
+        first_endpoint = path.split("/")[0]
         return f"{domain}/{first_endpoint}"
-        
+
     except Exception:
         return "unknown"
-
-
-def generate_action_id(action_object: ActionObject) -> str:
-    action = action_object.action
-
-    if action == "clicked":
-        text = action_object.metadata.get("text", "")
-        html_id = action_object.metadata.get("id", "")
-        aria_label = action_object.metadata.get("aria-label", "")
-        title = action_object.metadata.get("title", "")
-        href = action_object.metadata.get("href", "")
-        element_type = action_object.element_type.lower()
-
-        if element_type == "img":
-            aria_label = action_object.metadata.get("aria-label", "")
-            title = action_object.metadata.get("title", "")
-
-            if aria_label:
-                return f"{action}_image_{clean_text(aria_label)}"
-            elif title:
-                return f"{action}_image_{clean_text(title)}"
-            else:
-                return f"{action}_image"
-        elif element_type == "button" and text:
-            return f"{action}_{clean_text(text)}"
-        elif element_type == "button":
-            aria_label = action_object.metadata.get("aria-label", "")
-            html_id = action_object.metadata.get("id", "")
-            title = action_object.metadata.get("title", "")
-
-            if aria_label:
-                return f"{action}_button_{clean_text(aria_label)}"
-            elif html_id:
-                return f"{action}_button_{clean_text(html_id)}"
-            elif title:
-                return f"{action}_button_{clean_text(title)}"
-            else:
-                return f"{action}_button"
-        elif element_type == "a" and href:
-            aria_label = action_object.metadata.get("aria-label", "")
-            if aria_label:
-                return f"{action}_link_{clean_text(aria_label)}"
-            elif text:
-                return f"{action}_link_{clean_text(text)}"
-            else:
-                return f"{action}_link"
-        elif element_type == "a":
-            return f"{action}_link"
-        elif element_type == "input":
-            placeholder = action_object.metadata.get("placeholder", "")
-            aria_label = action_object.metadata.get("aria-label", "")
-            html_id = action_object.metadata.get("id", "")
-            title = action_object.metadata.get("title", "")
-
-            if placeholder:
-                return f"{action}_input_{clean_text(placeholder)}"
-            elif aria_label:
-                return f"{action}_input_{clean_text(aria_label)}"
-            elif html_id:
-                return f"{action}_input_{clean_text(html_id)}"
-            elif title:
-                return f"{action}_input_{clean_text(title)}"
-            else:
-                return f"{action}_input"
-        else:
-            return f"{action}_element"
-
-    elif action == "input":
-        placeholder = action_object.metadata.get("placeholder", "")
-        title = action_object.metadata.get("title", "")
-        aria_label = action_object.metadata.get("aria-label", "")
-        html_id = action_object.metadata.get("id", "")
-
-        if placeholder:
-            return f"{action}_with_placeholder_{clean_text(placeholder)}"
-        elif aria_label:
-            return f"{action}_with_aria_label_{clean_text(aria_label)}"
-        elif html_id:
-            return f"{action}_with_id_{clean_text(html_id)}"
-        elif title:
-            return f"{action}_with_title_{clean_text(title)}"
-        else:
-            return f"{action}_input"
-
-    elif action == "scrolled":
-        direction = action_object.metadata.get("scroll_direction", "unknown")
-        return f"{action}_{direction}"
 
 
 def generate_action_string(action_object: ActionObject) -> str:
@@ -268,27 +177,20 @@ def generate_action_string(action_object: ActionObject) -> str:
 
 
 def generate_activity_events(
-    events: List[Dict[str, Any]], session_id: str, project_id: str
+    events: List[Dict[str, Any]], session_id: str, project_id: str, batch_size: int = 10
 ):
     """
     Generate activity logs from rrweb events.
 
     Args:
         events: List of rrweb event dictionaries with keys: "type", "timestamp", "data"
+        session_id: The session ID to include in event logs
+        project_id: The project ID to get existing action IDs for reuse
+        batch_size: Maximum number of events to process in a single LLM request (default: 10)
     """
     node_map = {}
-    last_scroll_y = 0
-    last_scroll_x = 0
-    last_scroll_direction = ""
-    event_logs = []
-    action_id_counter = {}
-    from app.services.firestore_service import save_action_id_batch
-    
+    parsed_events = []
     for event in events:
-        action_id = ""
-        action_string = ""
-        event_log = {}
-        event_log["timestamp"] = event.get("timestamp")
         if event.get("type") == 2:
             node_map = build_node_map(event["data"]["node"])
 
@@ -297,71 +199,73 @@ def generate_activity_events(
             id = data.get("id")
 
             action = detect_action(event)
-            if action:
+            if action == "clicked":
                 node = node_map.get(id)
-                attributes = extract_attributes(node) if node else {}
-
-                if action == "input":
-                    input_value = data.get("text", "")
-                    if input_value:
-                        attributes["input_value"] = input_value
-                elif action == "scrolled":
-                    x = data.get("x", 0)
-                    y = data.get("y", 0)
-                    scroll_direction = get_scroll_direction(
-                        x, y, last_scroll_x, last_scroll_y
+                if node:
+                    attributes = extract_attributes(node)
+                    parsed_events.append(
+                        {
+                            "id": id,
+                            "action": action,
+                            "element_type": node.get("tagName", "") if node else "",
+                            "attributes": attributes,
+                            "timestamp": event.get("timestamp"),
+                        }
                     )
-
-                    if (
-                        scroll_direction != last_scroll_direction
-                        and scroll_direction != "no change"
-                    ):
-                        attributes["scroll_direction"] = scroll_direction
-                        last_scroll_direction = scroll_direction
-                    else:
-                        continue
-
-                    last_scroll_x = x
-                    last_scroll_y = y
-
-                if action == "clicked" and should_skip_click(node, attributes):
-                    continue
-
-                action_object = ActionObject(
-                    action=action,
-                    element_type=node.get("tagName", "") if node else "",
-                    metadata=attributes,
-                    id=str(id),
-                )
-                action_string = generate_action_string(action_object)
-                action_id = generate_action_id(action_object)
-                event_log["element_type"] = action_object.element_type
-                event_log["local_id"] = action_object.id
-                if action_id:
-                    action_id_counter[action_id] = action_id_counter.get(action_id, 0) + 1
-
         elif event.get("type") == 4:
             data = event.get("data", {})
             page_url = data.get("href", "Unknown")
-            clean_page_url = clean_url(page_url)
-            action_id = "page_loaded_" + clean_text(clean_page_url)
-            action_string = f"Page loaded: {clean_page_url}"
-            event_log["element_type"] = "page"
-            event_log["local_id"] = "page_load"
-            action_id_counter[action_id] = action_id_counter.get(action_id, 0) + 1
+            title = data.get("title", "Unknown")
+            action_string = f"Page loaded: {page_url}"
+            parsed_events.append(
+                {
+                    "id": "page_load",
+                    "action": "page_loaded",
+                    "element_type": "page",
+                    "attributes": {"url": page_url, "title": title},
+                    "timestamp": event.get("timestamp"),
+                    "action_string": action_string,
+                }
+            )
 
-        if action_string and action_id:
-            event_log["action_id"] = action_id
-            event_log["action_string"] = action_string
-            event_log["session_id"] = session_id
-            event_logs.append(event_log)
-    
-    if action_id_counter:
-        save_action_id_batch(action_id_counter, project_id)
-        APPLOGGER.info(f"Saved {len(action_id_counter)} action IDs in batch")
-    
-    save_action_events(event_logs, project_id)
-    APPLOGGER.info(f"Saved {len(event_logs)} events")
+    event_logs = generate_event_log_from_events(parsed_events, session_id, project_id, batch_size)
+
+    if event_logs:
+        action_id_counter = {}
+        action_logs = []
+
+        for event_log in event_logs:
+            action_id = event_log.get("action_id")
+            if action_id:
+                action_id_counter[action_id] = action_id_counter.get(action_id, 0) + 1
+
+                action_string = event_log.get("action_string")
+                if not action_string:
+                    action_string = generate_action_string(
+                        ActionObject(
+                            action=event_log.get("action"),
+                            element_type=event_log.get("element_type"),
+                            id=str(event_log.get("id")),
+                            metadata=event_log.get("attributes"),
+                        )
+                    )
+                action_logs.append(
+                    {
+                        "action_id": action_id,
+                        "action_string": action_string,
+                        "session_id": session_id,
+                        "element_type": event_log.get("element_type"),
+                        "attributes": event_log.get("attributes"),
+                        "timestamp": event_log.get("timestamp"),
+                    }
+                )
+
+        if action_id_counter:
+            save_action_id_batch(action_id_counter, project_id)
+           
+        save_action_events(action_logs, project_id)
+
+    return event_logs
 
 
 # def process_session_replay(session_id: str, events: List[Dict[str, Any]]) -> Dict[str, Any]:

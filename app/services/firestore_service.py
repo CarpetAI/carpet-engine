@@ -3,7 +3,7 @@ import uuid
 import secrets
 import time
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from google.cloud import firestore
 from google.oauth2 import service_account
 from app.config.settings import settings
@@ -360,4 +360,32 @@ def get_action_events_from_action_id(project_id: str, action_id: str, max_tokens
     except Exception as e:
         APPLOGGER.error(f"Error getting action events for {action_id}: {e}")
         return None
+
+
+def get_existing_action_ids(project_id: str) -> List[str]:
+    """
+    Get all existing action IDs for a project from Firestore.
+    
+    Args:
+        project_id: The project ID to get action IDs for
+        
+    Returns:
+        List of existing action ID strings
+    """
+    try:
+        db = get_firestore_client()
+        
+        action_ids_ref = db.collection("projects").document(project_id).collection("action_ids")
+        docs = action_ids_ref.stream()
+        
+        existing_action_ids = []
+        for doc in docs:
+            existing_action_ids.append(doc.id)
+        
+        APPLOGGER.info(f"Retrieved {len(existing_action_ids)} existing action IDs for project {project_id}")
+        return existing_action_ids
+        
+    except Exception as e:
+        APPLOGGER.error(f"Error getting existing action IDs for project {project_id}: {e}")
+        return []
     

@@ -68,8 +68,8 @@ async def save_session_replay_data(request: Request):
         )
         
         gcs_url = f"gs://{bucket_name}/sessions/{session_id}.json"
-        events = session_json.get("events", [])
-        generate_activity_events(new_events, session_id, project_id)
+        if new_events:
+            generate_activity_events(new_events, session_id, project_id)
         success = save_session_metadata(session_id, gcs_url, project_id)
             
         if success:
