@@ -87,14 +87,14 @@ def get_scroll_direction(
         elif x_change < 0:
             return "left"
         else:
-            return "no change"
+            return ""
     else:
         if y_change > 0:
             return "down"
         elif y_change < 0:
             return "up"
         else:
-            return "no change"
+            return ""
 
 
 def should_skip_click(node: Dict[str, Any], attributes: Dict[str, str]) -> bool:
@@ -190,6 +190,8 @@ def generate_activity_events(
     """
     node_map = {}
     parsed_events = []
+    last_scroll_y = 0
+    last_scroll_x = 0
     for event in events:
         if event.get("type") == 2:
             node_map = build_node_map(event["data"]["node"])
@@ -209,6 +211,37 @@ def generate_activity_events(
                             "action": action,
                             "element_type": node.get("tagName", "") if node else "",
                             "attributes": attributes,
+                            "timestamp": event.get("timestamp"),
+                        }
+                    )
+            elif action == "input":
+                node = node_map.get(id)
+                if node:
+                    attributes = extract_attributes(node)
+                    input_value = data.get('text', '')
+                    attributes["input_value"] = input_value
+                    parsed_events.append(
+                        {
+                            "id": id,
+                            "action": action,
+                            "element_type": node.get("tagName", "") if node else "",
+                            "attributes": attributes,
+                            "timestamp": event.get("timestamp"),
+                        }
+                    )
+            elif action == "scrolled":
+                x = data.get('x', 0)
+                y = data.get('y', 0)
+                scroll_direction = get_scroll_direction(x, y, last_scroll_x, last_scroll_y)
+                last_scroll_x = x
+                last_scroll_y = y
+                if scroll_direction:
+                    parsed_events.append(
+                        {
+                            "id": id,
+                            "action": action,
+                            "element_type": "scroll",
+                            "attributes": {"scroll_direction": scroll_direction},
                             "timestamp": event.get("timestamp"),
                         }
                     )

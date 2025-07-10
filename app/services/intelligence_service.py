@@ -7,6 +7,86 @@ from app.services.firestore_service import get_existing_action_ids
 APPLOGGER = logging.getLogger(__name__)
 
 
+def clean_consecutive_input_events(parsed_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Remove consecutive input events, keeping only the last one in each sequence.
+    
+    Args:
+        parsed_events: List of parsed events
+        
+    Returns:
+        List of events with consecutive input events cleaned up
+    """
+    if not parsed_events:
+        return []
+    
+    cleaned_events = []
+    i = 0
+    
+    while i < len(parsed_events):
+        current_event = parsed_events[i]
+        
+        if current_event.get("action") != "input":
+            cleaned_events.append(current_event)
+            i += 1
+            continue
+        
+        input_sequence_end = i
+        while (input_sequence_end < len(parsed_events) and 
+               parsed_events[input_sequence_end].get("action") == "input"):
+            input_sequence_end += 1
+        
+        if input_sequence_end > i:
+            last_input_event = parsed_events[input_sequence_end - 1]
+            cleaned_events.append(last_input_event)
+            APPLOGGER.info(f"Cleaned up {input_sequence_end - i} consecutive input events, keeping last one")
+        
+        i = input_sequence_end
+    
+    APPLOGGER.info(f"Cleaned events: {len(parsed_events)} -> {len(cleaned_events)}")
+    return cleaned_events
+
+
+def clean_consecutive_scroll_events(parsed_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Remove consecutive scroll events, keeping only the last one in each sequence.
+    
+    Args:
+        parsed_events: List of parsed events
+        
+    Returns:
+        List of events with consecutive scroll events cleaned up
+    """
+    if not parsed_events:
+        return []
+    
+    cleaned_events = []
+    i = 0
+    
+    while i < len(parsed_events):
+        current_event = parsed_events[i]
+        
+        if current_event.get("action") != "scrolled":
+            cleaned_events.append(current_event)
+            i += 1
+            continue
+        
+        scroll_sequence_end = i
+        while (scroll_sequence_end < len(parsed_events) and 
+               parsed_events[scroll_sequence_end].get("action") == "scrolled"):
+            scroll_sequence_end += 1
+        
+        if scroll_sequence_end > i:
+            last_scroll_event = parsed_events[scroll_sequence_end - 1]
+            cleaned_events.append(last_scroll_event)
+            APPLOGGER.info(f"Cleaned up {scroll_sequence_end - i} consecutive scroll events, keeping last one")
+        
+        i = scroll_sequence_end
+    
+    APPLOGGER.info(f"Cleaned scroll events: {len(parsed_events)} -> {len(cleaned_events)}")
+    return cleaned_events
+
+
 def generate_action_id_with_llm(
     parsed_events: List[Dict[str, Any]], project_id: str = None, batch_size: int = 10
 ) -> List[str]:
@@ -70,7 +150,8 @@ def generate_action_id_with_llm(
             - Examples: "clicked_view_photos", "clicked_submit_form", "clicked_navigation_menu"
             - PREFER EXISTING ACTION IDs when they match the user's intent
             - Only create new action IDs when there's no suitable existing match
-            - For page load, try to specify the page by the url or title
+            - For page load, try to determine the page type by the url or title
+            - For input events, use the attributes to determine the input type
             
             Return a JSON array of action_id strings only, in the same order as the events.
             """
@@ -174,16 +255,19 @@ def generate_event_log_from_events(
     if not parsed_events:
         return []
 
-    action_ids = generate_action_id_with_llm(parsed_events, project_id, batch_size)
+    cleaned_events = clean_consecutive_input_events(parsed_events)
+    cleaned_events = clean_consecutive_scroll_events(cleaned_events)
+    
+    action_ids = generate_action_id_with_llm(cleaned_events, project_id, batch_size)
     APPLOGGER.info(
-        f"Returned {len(action_ids)} action IDs and parsed events length is {len(parsed_events)}"
+        f"Returned {len(action_ids)} action IDs and cleaned events length is {len(cleaned_events)}"
     )
 
-    if action_ids and len(action_ids) == len(parsed_events):
-        for i, event in enumerate(parsed_events):
+    if action_ids and len(action_ids) == len(cleaned_events):
+        for i, event in enumerate(cleaned_events):
             action_id = action_ids[i]
-            parsed_events[i]["action_id"] = action_id
+            cleaned_events[i]["action_id"] = action_id
 
-        return parsed_events
+        return cleaned_events
 
     return []

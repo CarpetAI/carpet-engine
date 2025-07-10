@@ -228,7 +228,7 @@ def process_existing_replays(project_id: str):
     
     try:
         # Get all sessions for this project from Firestore
-        sessions = get_session_ids(project_id)[:30]
+        sessions = get_session_ids(project_id)[:100]
         if not sessions:
             print("No sessions found for this project")
             return {"status": "no_sessions", "message": "No sessions found"}
