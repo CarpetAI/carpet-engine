@@ -4,8 +4,51 @@ from pydantic import BaseModel
 
 from app.services.firestore_service import save_action_events, save_action_id_batch
 from app.services.intelligence_service import generate_event_log_from_events
+from app.utils import clean_events
 
 APPLOGGER = logging.getLogger(__name__)
+
+
+# EVENT TYPES
+# DomContentLoaded (0)
+# Load (1)
+# FullSnapshot (2)
+# IncrementalSnapshot (3)
+# Meta (4)
+# Custom (5)
+# Plugin (6)
+
+# IncrementalSnapshot (3) Types
+# 0 → Mutation - DOM structure changes
+# 1 → MouseMove - Mouse movement tracking
+# 2 → MouseInteraction - Mouse clicks, touches
+# 3 → Scroll - Scroll position changes
+# 4 → ViewportResize - Window/viewport size changes
+# 5 → Input - Form input value changes
+# 6 → TouchMove - Touch movement events
+# 7 → MediaInteraction - Media playback events
+# 8 → StyleSheetRule - CSS rule modifications
+# 9 → CanvasMutation - Canvas drawing operations
+# 10 → Font - Font loading events
+# 11 → Log - Console log events
+# 12 → Drag - Drag and drop events
+# 13 → StyleDeclaration - CSS style declarations
+# 14 → Selection - Text selection changes
+# 15 → AdoptedStyleSheet - Adopted stylesheet changes
+# 16 → CustomElement - Custom element events
+
+# Mouse Interaction Types
+# MouseUp (0) - Mouse button release
+# MouseDown (1) - Mouse button press
+# Click (2) - Mouse click
+# ContextMenu (3) - Right-click context menu
+# DblClick (4) - Double click
+# Focus (5) - Element receives focus
+# Blur (6) - Element loses focus
+# TouchStart (7) - Touch begins
+# TouchMove_Departed (8) - Touch movement (handled separately)
+# TouchEnd (9) - Touch ends
+# TouchCancel (10) - Touch cancelled
 
 
 class ActionObject(BaseModel):
@@ -261,6 +304,7 @@ def generate_activity_events(
                 }
             )
 
+    parsed_events = clean_events(parsed_events)
     event_logs = generate_event_log_from_events(parsed_events, session_id, project_id, batch_size)
 
     if event_logs:

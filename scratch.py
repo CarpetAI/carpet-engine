@@ -7,8 +7,9 @@ from google.cloud import storage
 from google.oauth2 import service_account
 from google.cloud import firestore
 from app.services.firestore_service import get_session_ids
-from app.services.analysis_service import generate_activity_events
+from app.services.analysis_service import generate_activity_events, detect_action
 from app.services.firebase_service import get_fb_session_events
+from app.services.intelligence_service import clean_consecutive_scroll_events
 
 # Configure logging
 logging.basicConfig(
@@ -213,7 +214,16 @@ def analyze_last_50_sessions(project_id: str = "f91c1c07-2a54-4756-8b2f-9b4fff44
 def test_generate_activity_event():
     events = get_fb_session_events("34b49186-2097-4b71-9f67-ab28b5850d65")
     generate_activity_events(events, "34b49186-2097-4b71-9f67-ab28b5850d65", "f91c1c07-2a54-4756-8b2f-9b4fff44da39")
-    
+
+def test_clean_consecutive_scroll_events():
+    events = get_fb_session_events("0c51e53a-3abf-4aa9-a80e-04c908928beb")
+    parsed_events = generate_activity_events(events, "0c51e53a-3abf-4aa9-a80e-04c908928beb", "f91c1c07-2a54-4756-8b2f-9b4fff44da39")
+    actions = [event.get("action") for event in parsed_events]
+    print(actions)
+    cleaned_events = clean_consecutive_scroll_events(parsed_events)
+    cleaned_actions = [event.get("action") for event in cleaned_events]
+    print(cleaned_actions)
+
 def process_existing_replays(project_id: str):
     """
     Process all existing replays for a given project ID.
@@ -354,6 +364,7 @@ def main():
 
     # test_generate_activity_event()
     process_existing_replays("f91c1c07-2a54-4756-8b2f-9b4fff44da39")
+    # test_clean_consecutive_scroll_events()
 
 if __name__ == "__main__":
     main()

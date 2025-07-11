@@ -5,8 +5,10 @@ import json
 import logging
 from datetime import datetime, timedelta
 from app.services.firebase_service import get_fb_session_events, get_bucket
-from app.services.firestore_service import get_session_ids, get_user_projects, create_project, get_project, save_session_metadata, get_project_by_api_key, get_firestore_client, get_action_events_from_action_id
+from app.services.firestore_service import get_session_ids, get_user_projects, create_project, get_project, save_session_metadata, get_project_by_api_key, get_firestore_client, get_action_events_from_action_id, get_random_session_ids_with_events, save_project_insights, get_latest_insights
 from app.services.analysis_service import generate_activity_events
+from app.services.intelligence_service import generate_project_insights
+import time
 APPLOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["sessions"])
@@ -238,5 +240,86 @@ async def rag_query_endpoint(request: Dict[str, Any]):
         
     except Exception as e:
         APPLOGGER.error(f"Error in RAG query: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to process RAG query") 
+        raise HTTPException(status_code=500, detail="Failed to process RAG query")
+
+
+@router.post("/projects/{project_id}/insights")
+async def generate_project_insights_endpoint(
+    project_id: str,
+    request: Dict[str, Any] = None
+):
+    try:
+        APPLOGGER.info(f"Generating insights for project {project_id}")
+        
+        project = get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        session_count = 5
+        if request and "session_count" in request:
+            session_count = min(max(request["session_count"], 1), 10)
+        
+        session_ids, sessions_data = get_random_session_ids_with_events(project_id, session_count)
+        if not session_ids:
+            raise HTTPException(status_code=400, detail="No sessions found for this project")
+        
+        insights = generate_project_insights(sessions_data, project_id)
+        if not insights:
+            raise HTTPException(status_code=500, detail="Failed to generate insights")
+        
+        insight_doc_ids = save_project_insights(project_id, insights, session_ids)
+        
+        total_events = sum(len(events) for events in sessions_data.values())
+        
+        response_data = {
+            "success": True,
+            "insights": insights,
+            "sessions_analyzed": session_ids,
+            "created_at": int(time.time()),
+            "summary": {
+                "sessions_analyzed": len(session_ids),
+                "total_events": total_events,
+                "insights_generated": len(insights)
+            }
+        }
+        
+        APPLOGGER.info(f"Successfully generated {len(insights)} insights for project {project_id}")
+        return JSONResponse(content=response_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        APPLOGGER.error(f"Error generating insights for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate project insights")
+
+
+@router.get("/projects/{project_id}/insights")
+async def get_project_insights_endpoint(project_id: str, limit: int = Query(3, ge=1, le=10)):
+    try:
+        APPLOGGER.info(f"Getting latest insights for project {project_id}")
+        
+        project = get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        insights = get_latest_insights(project_id, limit)
+        
+        response_data = {
+            "success": True,
+            "insights": insights,
+            "project_id": project_id,
+            "summary": {
+                "total_insights": len(insights),
+                "limit": limit
+            }
+        }
+        
+        APPLOGGER.info(f"Successfully retrieved {len(insights)} insights for project {project_id}")
+        return JSONResponse(content=response_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        APPLOGGER.error(f"Error getting insights for project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to get project insights") 
        

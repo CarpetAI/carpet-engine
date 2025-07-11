@@ -2,89 +2,11 @@ import os
 import logging
 from typing import Dict, Any, List
 from openai import OpenAI
-from app.services.firestore_service import get_existing_action_ids
+from app.services.firestore_service import get_existing_action_ids, estimate_tokens
+from app.utils import clean_events
+import json
 
 APPLOGGER = logging.getLogger(__name__)
-
-
-def clean_consecutive_input_events(parsed_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Remove consecutive input events, keeping only the last one in each sequence.
-    
-    Args:
-        parsed_events: List of parsed events
-        
-    Returns:
-        List of events with consecutive input events cleaned up
-    """
-    if not parsed_events:
-        return []
-    
-    cleaned_events = []
-    i = 0
-    
-    while i < len(parsed_events):
-        current_event = parsed_events[i]
-        
-        if current_event.get("action") != "input":
-            cleaned_events.append(current_event)
-            i += 1
-            continue
-        
-        input_sequence_end = i
-        while (input_sequence_end < len(parsed_events) and 
-               parsed_events[input_sequence_end].get("action") == "input"):
-            input_sequence_end += 1
-        
-        if input_sequence_end > i:
-            last_input_event = parsed_events[input_sequence_end - 1]
-            cleaned_events.append(last_input_event)
-            APPLOGGER.info(f"Cleaned up {input_sequence_end - i} consecutive input events, keeping last one")
-        
-        i = input_sequence_end
-    
-    APPLOGGER.info(f"Cleaned events: {len(parsed_events)} -> {len(cleaned_events)}")
-    return cleaned_events
-
-
-def clean_consecutive_scroll_events(parsed_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Remove consecutive scroll events, keeping only the last one in each sequence.
-    
-    Args:
-        parsed_events: List of parsed events
-        
-    Returns:
-        List of events with consecutive scroll events cleaned up
-    """
-    if not parsed_events:
-        return []
-    
-    cleaned_events = []
-    i = 0
-    
-    while i < len(parsed_events):
-        current_event = parsed_events[i]
-        
-        if current_event.get("action") != "scrolled":
-            cleaned_events.append(current_event)
-            i += 1
-            continue
-        
-        scroll_sequence_end = i
-        while (scroll_sequence_end < len(parsed_events) and 
-               parsed_events[scroll_sequence_end].get("action") == "scrolled"):
-            scroll_sequence_end += 1
-        
-        if scroll_sequence_end > i:
-            last_scroll_event = parsed_events[scroll_sequence_end - 1]
-            cleaned_events.append(last_scroll_event)
-            APPLOGGER.info(f"Cleaned up {scroll_sequence_end - i} consecutive scroll events, keeping last one")
-        
-        i = scroll_sequence_end
-    
-    APPLOGGER.info(f"Cleaned scroll events: {len(parsed_events)} -> {len(cleaned_events)}")
-    return cleaned_events
 
 
 def generate_action_id_with_llm(
@@ -235,7 +157,7 @@ def generate_action_id_with_llm(
 
 
 def generate_event_log_from_events(
-    parsed_events: List[Dict[str, Any]],
+    cleaned_events: List[Dict[str, Any]],
     session_id: str,
     project_id: str = None,
     batch_size: int = 10,
@@ -252,11 +174,8 @@ def generate_event_log_from_events(
     Returns:
         List of event logs with intelligent action_id and session_id
     """
-    if not parsed_events:
+    if not cleaned_events:
         return []
-
-    cleaned_events = clean_consecutive_input_events(parsed_events)
-    cleaned_events = clean_consecutive_scroll_events(cleaned_events)
     
     action_ids = generate_action_id_with_llm(cleaned_events, project_id, batch_size)
     APPLOGGER.info(
@@ -271,3 +190,103 @@ def generate_event_log_from_events(
         return cleaned_events
 
     return []
+
+
+def generate_project_insights(sessions_data: Dict[str, List[Dict]], project_id: str, max_tokens: int = 8000) -> List[Dict[str, Any]]:
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        sessions_to_include = {}
+        current_tokens = 0
+        
+        for session_id, events in sessions_data.items():
+            session_json = json.dumps(events)
+            session_tokens = estimate_tokens(session_json)
+            
+            if max_tokens is not None and current_tokens + session_tokens > max_tokens:
+                APPLOGGER.info(f"Token limit reached ({current_tokens}/{max_tokens}). Stopping at {len(sessions_to_include)} sessions.")
+                break
+            
+            sessions_to_include[session_id] = events
+            current_tokens += session_tokens
+        
+        if not sessions_to_include:
+            APPLOGGER.warning("No sessions could be included within token limit")
+            return []
+        
+        sessions_json = json.dumps(sessions_to_include, indent=2)
+        
+        prompt = f"""
+        Analyze this user session data and generate actionable insights that would help the product team know what to build next.
+        
+        Examples of insights:
+        - User behavior patterns that suggest feature opportunities
+        - Pain points or friction in the user journey
+        - Underutilized features that could be improved
+        - User needs that aren't being met
+        - Opportunities for new features or improvements
+        - Any other insights that would help the product team know what to build next
+        
+        
+        Session Data: {sessions_json}
+        
+        Make insights actionable and specific to help guide product development decisions.
+        """
+    
+        response = client.chat.completions.create(
+            model="o3-mini",
+            reasoning_effort="medium",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert product analyst who helps teams understand user behavior and identify opportunities for product improvements. You provide actionable insights based on user session data.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "insights_array",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "insights": {
+                                "type": "array",
+                                "description": "List of insight objects.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {"type": "string", "minLength": 1},
+                                        "description": {"type": "string", "minLength": 1},
+                                    },
+                                    "required": ["title", "description"],
+                                    "additionalProperties": False,
+                                },
+                                "maxItems": 3
+                            }
+                        },
+                        "required": ["insights"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            max_completion_tokens=1500,
+        )
+        
+        result = response.choices[0].message.content
+        
+        try:
+            insights_data = json.loads(result)
+            insights = insights_data.get("insights", [])
+            
+            APPLOGGER.info(f"Generated {len(insights)} insights for project {project_id} using {len(sessions_to_include)} sessions ({current_tokens} tokens)")
+            return insights
+            
+        except json.JSONDecodeError as e:
+            APPLOGGER.error(f"Failed to parse LLM response as JSON: {e}")
+            return []
+            
+    except Exception as e:
+        APPLOGGER.error(f"Error generating project insights: {e}")
+        return []

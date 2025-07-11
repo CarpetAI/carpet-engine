@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any, List
 from google.cloud import firestore
 from google.oauth2 import service_account
 from app.config.settings import settings
+from app.utils import clean_events
 
 APPLOGGER = logging.getLogger(__name__)
 
@@ -217,22 +218,25 @@ def save_action_id_batch(action_ids: Dict[str, int], project_id: str):
     try:
         db = get_firestore_client()
         batch = db.batch()
-        
+
         for action_id, count in action_ids.items():
-            doc_ref = db.collection("projects").document(project_id).collection(
-                "action_ids"
-            ).document(action_id)
-            
+            doc_ref = (
+                db.collection("projects")
+                .document(project_id)
+                .collection("action_ids")
+                .document(action_id)
+            )
+
             doc = doc_ref.get()
             if doc.exists:
-                current_count = doc.to_dict().get('count', 0)
-                batch.update(doc_ref, {'count': current_count + count})
+                current_count = doc.to_dict().get("count", 0)
+                batch.update(doc_ref, {"count": current_count + count})
             else:
-                batch.set(doc_ref, {'count': count})
-        
+                batch.set(doc_ref, {"count": count})
+
         batch.commit()
         return True
-            
+
     except Exception as e:
         APPLOGGER.error(f"Error saving action IDs in batch: {e}")
         return False
@@ -243,120 +247,150 @@ def save_action_events(events: Dict[str, Any], project_id: str):
         db = get_firestore_client()
         total_events = len(events)
         events_list = list(events) if isinstance(events, dict) else events
-        
+
         # Process in batches of 500 (Firestore limit)
         batch_size = 500
         total_saved = 0
-        
+
         for i in range(0, len(events_list), batch_size):
             batch = db.batch()
-            batch_events = events_list[i:i + batch_size]
-            
+            batch_events = events_list[i : i + batch_size]
+
             for event in batch_events:
-                doc_ref = db.collection("projects").document(project_id).collection(
-                    "action_events"
-                ).document()
+                doc_ref = (
+                    db.collection("projects")
+                    .document(project_id)
+                    .collection("action_events")
+                    .document()
+                )
                 batch.set(doc_ref, event)
-            
+
             batch.commit()
             total_saved += len(batch_events)
-        
+
         return True
     except Exception as e:
         APPLOGGER.error(f"Error saving action events in batch: {e}")
         return False
 
-def get_action_events_from_action_id(project_id: str, action_id: str, max_tokens: int = 8000):
+
+def get_action_events_from_action_id(
+    project_id: str, action_id: str, max_tokens: int = 8000
+):
     """
     Get all events with the specified action_id and surrounding context events.
-    
+
     Args:
         project_id: The project ID
         action_id: The specific action ID to find
-        max_tokens: Maximum tokens to return (default: 4000 tokens)
-        
+        max_tokens: Maximum tokens to return (default: 8000 tokens)
+
     Returns:
         Dictionary with all events having the action_id and surrounding context events
     """
     try:
         db = get_firestore_client()
-        
-        action_events_ref = db.collection("projects").document(project_id).collection(
-            "action_events"
-        ).where('action_id', '==', action_id)
-        
+
+        action_events_ref = (
+            db.collection("projects")
+            .document(project_id)
+            .collection("action_events")
+            .where("action_id", "==", action_id)
+        )
+
         action_events_docs = action_events_ref.stream()
         target_events = []
-        
+
         for doc in action_events_docs:
             event_data = doc.to_dict()
             target_events.append(event_data)
-        
+
         if not target_events:
-            APPLOGGER.warning(f"No events found with action_id {action_id} for project {project_id}")
+            APPLOGGER.warning(
+                f"No events found with action_id {action_id} for project {project_id}"
+            )
             return None
-        
-        session_ids = list(set([event.get('session_id') for event in target_events if event.get('session_id')]))
-        
+
+        session_ids = list(
+            set(
+                [
+                    event.get("session_id")
+                    for event in target_events
+                    if event.get("session_id")
+                ]
+            )
+        )
+
         session_metadata = {}
         for session_id in session_ids:
             session_doc = db.collection("session_replays").document(session_id).get()
             if session_doc.exists:
                 session_data = session_doc.to_dict()
-                session_metadata[session_id] = session_data.get('timestamp', 0)
+                session_metadata[session_id] = session_data.get("timestamp", 0)
             else:
                 session_metadata[session_id] = 0
-        
-        session_ids.sort(key=lambda session_id: session_metadata.get(session_id, 0), reverse=True)
-        
+
+        session_ids.sort(
+            key=lambda session_id: session_metadata.get(session_id, 0), reverse=True
+        )
+
         context_events_by_session = {}
         seen_document_ids = set()
         current_tokens = 0
         sessions_included = 0
-        
+
         for session_id in session_ids:
-            session_events_ref = db.collection("projects").document(project_id).collection(
-                "action_events"
-            ).where('session_id', '==', session_id)
-            
+            session_events_ref = (
+                db.collection("projects")
+                .document(project_id)
+                .collection("action_events")
+                .where("session_id", "==", session_id)
+            )
+
             session_docs = session_events_ref.stream()
             session_events = []
-            
+
             for doc in session_docs:
                 event_data = doc.to_dict()
-                
+
                 if doc.id not in seen_document_ids:
-                    event_data.pop('session_id', None)
-                    event_data.pop('local_id', None)
-                    
+                    event_data.pop("session_id", None)
+                    event_data.pop("local_id", None)
+
                     session_events.append(event_data)
                     seen_document_ids.add(doc.id)
-            
-            session_events.sort(key=lambda x: x.get('timestamp', 0))
-            
+
+            session_events.sort(key=lambda x: x.get("timestamp", 0))
+
             # Estimate tokens for this session
             session_json = json.dumps(session_events)
             session_tokens = estimate_tokens(session_json)
-            
+
             if max_tokens is not None and current_tokens + session_tokens > max_tokens:
-                APPLOGGER.info(f"Token limit reached ({current_tokens}/{max_tokens}). Stopping at {sessions_included} sessions.")
+                APPLOGGER.info(
+                    f"Token limit reached ({current_tokens}/{max_tokens}). Stopping at {sessions_included} sessions."
+                )
                 break
-            
+
             context_events_by_session[session_id] = session_events
             current_tokens += session_tokens
             sessions_included += 1
-        
-        total_context_events = sum(len(events) for events in context_events_by_session.values())
+
+        total_context_events = sum(
+            len(events) for events in context_events_by_session.values()
+        )
         token_info = f" ({current_tokens} tokens)" if max_tokens is not None else ""
-        APPLOGGER.info(f"Retrieved {len(target_events)} events with action_id {action_id} and {total_context_events} context events across {len(context_events_by_session)} sessions{token_info}")
-        
+        APPLOGGER.info(
+            f"Retrieved {len(target_events)} events with action_id {action_id} and {total_context_events} context events across {len(context_events_by_session)} sessions{token_info}"
+        )
+
         return {
             "target_events": target_events,
             "context_events_by_session": context_events_by_session,
             "session_ids": session_ids,
-            "action_id": action_id
+            "action_id": action_id,
         }
-        
+
     except Exception as e:
         APPLOGGER.error(f"Error getting action events for {action_id}: {e}")
         return None
@@ -365,27 +399,186 @@ def get_action_events_from_action_id(project_id: str, action_id: str, max_tokens
 def get_existing_action_ids(project_id: str) -> List[str]:
     """
     Get all existing action IDs for a project from Firestore.
-    
+
     Args:
         project_id: The project ID to get action IDs for
-        
+
     Returns:
         List of existing action ID strings
     """
     try:
         db = get_firestore_client()
-        
-        action_ids_ref = db.collection("projects").document(project_id).collection("action_ids")
+
+        action_ids_ref = (
+            db.collection("projects").document(project_id).collection("action_ids")
+        )
         docs = action_ids_ref.stream()
-        
+
         existing_action_ids = []
         for doc in docs:
             existing_action_ids.append(doc.id)
-        
-        APPLOGGER.info(f"Retrieved {len(existing_action_ids)} existing action IDs for project {project_id}")
+
+        APPLOGGER.info(
+            f"Retrieved {len(existing_action_ids)} existing action IDs for project {project_id}"
+        )
         return existing_action_ids
-        
+
     except Exception as e:
-        APPLOGGER.error(f"Error getting existing action IDs for project {project_id}: {e}")
+        APPLOGGER.error(
+            f"Error getting existing action IDs for project {project_id}: {e}"
+        )
         return []
-    
+
+
+def get_random_session_ids_with_events(
+    project_id: str, count: int = 10
+) -> tuple[List[str], Dict[str, List[Dict]]]:
+    try:
+        db = get_firestore_client()
+
+        query = (
+            db.collection("session_replays")
+            .where("projectId", "==", project_id)
+            .order_by("timestamp", direction=firestore.Query.DESCENDING)
+        )
+
+        snapshot = query.get()
+        all_session_ids = [doc.id for doc in snapshot]
+
+        if not all_session_ids:
+            APPLOGGER.warning(f"No sessions found for project {project_id}")
+            return [], {}
+
+        import random
+
+        random.shuffle(all_session_ids)
+
+        selected_session_ids = []
+        sessions_data = {}
+
+        for session_id in all_session_ids:
+            if len(selected_session_ids) >= count:
+                break
+
+            session_events = get_action_events_for_sessions(project_id, [session_id])
+            if session_id in session_events and len(session_events[session_id]) >= 5:
+                selected_session_ids.append(session_id)
+                sessions_data[session_id] = session_events[session_id]
+
+        if not selected_session_ids:
+            APPLOGGER.warning(
+                f"No sessions with at least 3 action events found for project {project_id}"
+            )
+            return [], {}
+
+        total_events = sum(len(events) for events in sessions_data.values())
+        APPLOGGER.info(
+            f"Selected {len(selected_session_ids)} session IDs with at least 2 action events for project {project_id} (total events: {total_events})"
+        )
+        APPLOGGER.info(f"Sessions data: {sessions_data}")
+
+        return selected_session_ids, sessions_data
+
+    except Exception as e:
+        APPLOGGER.error(
+            f"Error getting random session IDs with events for project {project_id}: {e}"
+        )
+        return [], {}
+
+
+def get_action_events_for_sessions(
+    project_id: str, session_ids: List[str]
+) -> Dict[str, List[Dict]]:
+    try:
+        db = get_firestore_client()
+        sessions_data = {}
+
+        for session_id in session_ids:
+            session_events_ref = (
+                db.collection("projects")
+                .document(project_id)
+                .collection("action_events")
+                .where("session_id", "==", session_id)
+            )
+
+            session_docs = session_events_ref.stream()
+            session_events = []
+
+            for doc in session_docs:
+                event_data = doc.to_dict()
+                session_events.append(event_data)
+
+            session_events.sort(key=lambda x: x.get("timestamp", 0))
+            sessions_data[session_id] = clean_events(session_events)
+
+        total_events = sum(len(events) for events in sessions_data.values())
+        APPLOGGER.info(
+            f"Retrieved {total_events} total events across {len(sessions_data)} sessions for project {project_id}"
+        )
+
+        return sessions_data
+
+    except Exception as e:
+        APPLOGGER.error(
+            f"Error getting action events for sessions in project {project_id}: {e}"
+        )
+        return {}
+
+
+def save_project_insights(
+    project_id: str, insights: List[Dict[str, Any]], sessions_analyzed: List[str]
+) -> List[str]:
+    try:
+        db = get_firestore_client()
+        saved_insight_ids = []
+
+        for insight in insights:
+            insight_data = {
+                "project_id": project_id,
+                "title": insight.get("title"),
+                "description": insight.get("description"),
+                "sessions_analyzed": sessions_analyzed,
+                "created_at": int(time.time()),
+            }
+
+            doc_ref = db.collection("insights").document()
+            doc_ref.set(insight_data)
+            saved_insight_ids.append(doc_ref.id)
+
+        APPLOGGER.info(
+            f"Saved {len(saved_insight_ids)} insights for project {project_id}"
+        )
+        return saved_insight_ids
+
+    except Exception as e:
+        APPLOGGER.error(f"Error saving insights for project {project_id}: {e}")
+        return []
+
+
+def get_latest_insights(project_id: str, limit: int = 3) -> List[Dict[str, Any]]:
+    try:
+        db = get_firestore_client()
+
+        insights_ref = (
+            db.collection("insights")
+            .where("project_id", "==", project_id)
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+
+        docs = insights_ref.stream()
+        insights = []
+
+        for doc in docs:
+            insight_data = doc.to_dict()
+            insight_data["id"] = doc.id
+            insights.append(insight_data)
+
+        APPLOGGER.info(
+            f"Retrieved {len(insights)} latest insights for project {project_id}"
+        )
+        return insights
+
+    except Exception as e:
+        APPLOGGER.error(f"Error getting latest insights for project {project_id}: {e}")
+        return []
