@@ -9,7 +9,7 @@ from google.cloud import firestore
 from app.services.firestore_service import get_session_ids
 from app.services.analysis_service import generate_activity_events, detect_action
 from app.services.firebase_service import get_fb_session_events
-from app.services.intelligence_service import clean_consecutive_scroll_events
+from app.utils import clean_events
 
 # Configure logging
 logging.basicConfig(
@@ -220,7 +220,7 @@ def test_clean_consecutive_scroll_events():
     parsed_events = generate_activity_events(events, "0c51e53a-3abf-4aa9-a80e-04c908928beb", "f91c1c07-2a54-4756-8b2f-9b4fff44da39")
     actions = [event.get("action") for event in parsed_events]
     print(actions)
-    cleaned_events = clean_consecutive_scroll_events(parsed_events)
+    cleaned_events = clean_events(parsed_events)
     cleaned_actions = [event.get("action") for event in cleaned_events]
     print(cleaned_actions)
 
@@ -238,7 +238,7 @@ def process_existing_replays(project_id: str):
     
     try:
         # Get all sessions for this project from Firestore
-        sessions = get_session_ids(project_id)[:100]
+        sessions = get_session_ids(project_id)[:200]
         if not sessions:
             print("No sessions found for this project")
             return {"status": "no_sessions", "message": "No sessions found"}
@@ -363,7 +363,7 @@ def main():
     # analyze_last_50_sessions()
 
     # test_generate_activity_event()
-    process_existing_replays("f91c1c07-2a54-4756-8b2f-9b4fff44da39")
+    process_existing_replays("5145654e-8a7d-4860-906a-1dda6622f6e1")
     # test_clean_consecutive_scroll_events()
 
 if __name__ == "__main__":

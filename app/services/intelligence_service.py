@@ -65,84 +65,112 @@ def generate_action_id_with_llm(
             For each event, generate an action_id: A short, descriptive identifier that captures the user's intent.
             
             Rules:
-            - Use semantic, logical descriptions instead of technical details
-            - Focus on what the user is trying to accomplish
-            - Be specific but concise
-            - Use lowercase with underscores for action_id
-            - Examples: "clicked_view_photos", "clicked_submit_form", "clicked_navigation_menu"
             - PREFER EXISTING ACTION IDs when they match the user's intent
             - Only create new action IDs when there's no suitable existing match
-            - For page load, try to determine the page type by the url or title
-            - For input events, use the attributes to determine the input type
+            - Use semantic, logical descriptions instead of technical details
+            - Focus on what the user is trying to accomplish
+            - Be specific but concise. Use the attributes for context.
+            - Use lowercase with underscores for action_id
+            - NEVER use generic element types like "button", "span", "div", "h1", "h2", etc. in action IDs
+            - Instead, describe what the element does or contains (e.g., "clicked_submit_button", "clicked_nav_link", "clicked_product_title")
+            - Look at text content, aria-labels, titles, and other attributes to understand purpose
+            - Examples: "clicked_view_photos", "clicked_submit_form", "clicked_navigation_menu", "clicked_add_to_cart", "clicked_user_profile"
+            - For page load, try to determine the page type by the url or title. Please be specific on what type of page loaded. 
+            If unknown, append the url to the action_id. eg page_loaded_[url]
             
             Return a JSON array of action_id strings only, in the same order as the events.
             """
 
-            response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert at analyzing user interactions and generating meaningful action descriptions. You prioritize reusing existing action IDs when they match the user's intent.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "action_id_array",
-                        "strict": True,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "action_ids": {
-                                    "type": "array",
-                                    "description": "List of action_id strings.",
-                                    "items": {"type": "string", "minLength": 1},
-                                }
-                            },
-                            "required": ["action_ids"],
-                            "additionalProperties": False,
+            system_message = {
+                "role": "system",
+                "content": "You are an expert at analyzing user interactions and generating meaningful action descriptions. You prioritize reusing existing action IDs when they match the user's intent.",
+            }
+            
+            response_format_config = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "action_id_array",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "action_ids": {
+                                "type": "array",
+                                "description": "List of action_id strings.",
+                                "items": {"type": "string", "minLength": 1},
+                            }
                         },
+                        "required": ["action_ids"],
+                        "additionalProperties": False,
                     },
                 },
+            }
+
+            response = client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[system_message, {"role": "user", "content": prompt}],
+                response_format=response_format_config,
                 temperature=0.3,
                 max_tokens=1000,
             )
 
             result = response.choices[0].message.content
 
-            try:
-                import json
+            max_retries = 3
+            retry_count = 0
+            batch_action_ids = None
 
-                batch_action_ids = json.loads(result).get("action_ids", [])
-                print("batch_action_ids", batch_action_ids)
+            while retry_count < max_retries:
+                try:
+                    import json
 
-                if isinstance(batch_action_ids, list) and len(batch_action_ids) == len(
-                    batch_events
-                ):
-                    for action_id in batch_action_ids:
-                        all_action_ids.add(action_id)
+                    batch_action_ids = json.loads(result).get("action_ids", [])
+                    print("batch_action_ids", batch_action_ids)
 
-                    all_action_ids_list.extend(batch_action_ids)
-                    APPLOGGER.info(
-                        f"Successfully generated {len(batch_action_ids)} action IDs for batch {batch_start}-{batch_end}"
-                    )
-                else:
+                    if isinstance(batch_action_ids, list) and len(batch_action_ids) == len(
+                        batch_events
+                    ):
+                        for action_id in batch_action_ids:
+                            all_action_ids.add(action_id)
+
+                        all_action_ids_list.extend(batch_action_ids)
+                        APPLOGGER.info(
+                            f"Successfully generated {len(batch_action_ids)} action IDs for batch {batch_start}-{batch_end}"
+                        )
+                        break
+                    else:
+                        APPLOGGER.error(
+                            f"Invalid response format for batch {batch_start}-{batch_end}: expected {len(batch_events)} action IDs, got {len(batch_action_ids) if isinstance(batch_action_ids, list) else 'non-list'}"
+                        )
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            response = client.chat.completions.create(
+                                model="gpt-4.1",
+                                messages=[system_message, {"role": "user", "content": prompt}],
+                                response_format=response_format_config,
+                                temperature=0.3,
+                                max_tokens=1000,
+                            )
+                            result = response.choices[0].message.content
+
+                except json.JSONDecodeError as e:
                     APPLOGGER.error(
-                        f"Invalid response format for batch {batch_start}-{batch_end}: expected {len(batch_events)} action IDs, got {len(batch_action_ids) if isinstance(batch_action_ids, list) else 'non-list'}"
+                        f"Failed to parse LLM response as JSON for batch {batch_start}-{batch_end}: {e}"
                     )
-                    fallback_ids = [
-                        f"clicked_element_{j}" for j in range(len(batch_events))
-                    ]
-                    all_action_ids_list.extend(fallback_ids)
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        response = client.chat.completions.create(
+                            model="gpt-4.1",
+                            messages=[system_message, {"role": "user", "content": prompt}],
+                            response_format=response_format_config,
+                            temperature=0.3,
+                            max_tokens=1000,
+                        )
+                        result = response.choices[0].message.content
 
-            except json.JSONDecodeError as e:
-                APPLOGGER.error(
-                    f"Failed to parse LLM response as JSON for batch {batch_start}-{batch_end}: {e}"
-                )
+            if retry_count >= max_retries or not batch_action_ids:
                 fallback_ids = [
-                    f"clicked_element_{j}" for j in range(len(batch_events))
+                    f"clicked_unknown" for j in range(len(batch_events))
                 ]
                 all_action_ids_list.extend(fallback_ids)
 
