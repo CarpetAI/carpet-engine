@@ -75,8 +75,10 @@ def generate_action_id_with_llm(
             - Instead, describe what the element does or contains (e.g., "clicked_submit_button", "clicked_nav_link", "clicked_product_title")
             - Look at text content, aria-labels, titles, and other attributes to understand purpose
             - Examples: "clicked_view_photos", "clicked_submit_form", "clicked_navigation_menu", "clicked_add_to_cart", "clicked_user_profile"
-            - For page load, try to determine the page type by the url or title. Please be specific on what type of page loaded. 
-            If unknown, append the url to the action_id. eg page_loaded_[url]
+            - For page load, try to determine the page type by the url or title. Please be specific on what type of page loaded.
+            - Only include the URL in the action_id if the page type is completely unclear or unknown
+            - Examples: "page_loaded_home", "page_loaded_product_details", "page_loaded_checkout", "page_loaded_user_profile"
+            - Only use "page_loaded_[url]" when you cannot determine what type of page it is
             
             Return a JSON array of action_id strings only, in the same order as the events.
             """

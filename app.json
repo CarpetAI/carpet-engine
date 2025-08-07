@@ -10,8 +10,8 @@
       "value": "session-replays"
     },
     "SERVICE_ACCOUNT_KEY_PATH": {
-      "description": "Path to Google Cloud service account key file",
-      "value": "app/config/serviceAccountKey.json"
+      "description": "Path to Google Cloud service account key file (set this in your environment)",
+      "required": true
     },
     "API_TITLE": {
       "description": "API title",
@@ -32,6 +32,14 @@
     "DEBUG": {
       "description": "Debug mode",
       "value": "false"
+    },
+    "PINECONE_API_KEY": {
+      "description": "Pinecone API key for RAG features (optional)",
+      "required": false
+    },
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API key for AI features (optional)",
+      "required": false
     }
   },
   "formation": {

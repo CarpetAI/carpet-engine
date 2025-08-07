@@ -21,15 +21,13 @@ logging.basicConfig(
 )
 
 def get_storage_client():
-    creds = service_account.Credentials.from_service_account_file(
-        "app/config/serviceAccountKey.json"
-    )
+    service_account_path = os.getenv("SERVICE_ACCOUNT_KEY_PATH", "app/config/serviceAccountKey.json")
+    creds = service_account.Credentials.from_service_account_file(service_account_path)
     return storage.Client(credentials=creds, project=creds.project_id)
 
 def get_firestore_client():
-    creds = service_account.Credentials.from_service_account_file(
-        "app/config/serviceAccountKey.json"
-    )
+    service_account_path = os.getenv("SERVICE_ACCOUNT_KEY_PATH", "app/config/serviceAccountKey.json")
+    creds = service_account.Credentials.from_service_account_file(service_account_path)
     return firestore.Client(credentials=creds, project=creds.project_id)
 
 def get_bucket(bucket_name):
@@ -363,7 +361,7 @@ def main():
     # analyze_last_50_sessions()
 
     # test_generate_activity_event()
-    process_existing_replays("5145654e-8a7d-4860-906a-1dda6622f6e1")
+    process_existing_replays("f91c1c07-2a54-4756-8b2f-9b4fff44da39")
     # test_clean_consecutive_scroll_events()
 
 if __name__ == "__main__":

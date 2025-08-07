@@ -47,8 +47,18 @@ carpet-engine/
 
 3. **Set up Firebase:**
    - Download your Firebase service account key JSON file
-   - Update the `FIREBASE_SERVICE_ACCOUNT_PATH` in your `.env` file
+   - Place it in a secure location (NOT in the repository)
+   - Update the `SERVICE_ACCOUNT_KEY_PATH` in your `.env` file to point to the key file
    - Ensure your Firebase project has Cloud Storage enabled
+
+## Security Considerations
+
+⚠️ **IMPORTANT:** Before running this application:
+
+1. **Never commit service account keys** - The `serviceAccountKey.json` file is excluded from version control
+2. **Use environment variables** - All sensitive configuration should be set via environment variables
+3. **Secure your Firebase project** - Ensure proper IAM permissions are configured
+4. **Review API keys** - If using optional features (Pinecone, OpenAI), ensure API keys are properly secured
 
 ## Running the Application
 
@@ -93,8 +103,12 @@ Once the server is running, you can access:
 The application uses environment variables for configuration. See `env.example` for available options.
 
 ### Required Firebase Configuration
-- `FIREBASE_SERVICE_ACCOUNT_PATH`: Path to your Firebase service account JSON file
-- `FIREBASE_BUCKET_NAME`: Firebase Cloud Storage bucket name (default: "chat-apt-session-replays")
+- `SERVICE_ACCOUNT_KEY_PATH`: Path to your Firebase service account JSON file
+- `BUCKET_NAME`: Firebase Cloud Storage bucket name (default: "session-replays")
+
+### Optional External Services
+- `PINECONE_API_KEY`: Pinecone API key for RAG features
+- `OPENAI_API_KEY`: OpenAI API key for AI features
 
 ## Development
 
@@ -124,4 +138,16 @@ The application uses Python's built-in logging module. Logs include:
 - Session retrieval attempts
 - Error details
 - Event count information
-- Firebase operation status 
+- Firebase operation status
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## License
+
+[Add your license here] 
