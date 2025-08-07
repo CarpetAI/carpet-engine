@@ -145,4 +145,9 @@ serviceAccountKey.json
 *.json
 !package.json
 !tsconfig.json
-!app.json 
+!app.json
+
+# Development and testing files
+scratch.py
+dev_*.py
+test_*.py 

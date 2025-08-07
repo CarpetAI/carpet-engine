@@ -1,9 +1,9 @@
 {
   "name": "carpet-engine",
-  "description": "Session Events API for retrieving session events from Google Cloud Storage",
+  "description": "A FastAPI application for retrieving and analyzing session events from Firebase storage with AI-powered insights",
   "repository": "https://github.com/yourusername/carpet-engine",
   "logo": "",
-  "keywords": ["python", "fastapi", "session-replay", "analytics"],
+  "keywords": ["python", "fastapi", "session-replay", "analytics", "firebase", "ai", "openai", "pinecone"],
   "env": {
     "BUCKET_NAME": {
       "description": "Google Cloud Storage bucket name",
@@ -15,11 +15,11 @@
     },
     "API_TITLE": {
       "description": "API title",
-      "value": "Session Events API"
+      "value": "Carpet Engine - Session Events API"
     },
     "API_DESCRIPTION": {
       "description": "API description",
-      "value": "API for retrieving session events from Google Cloud Storage"
+      "value": "A FastAPI application for retrieving and analyzing session events from Firebase storage"
     },
     "API_VERSION": {
       "description": "API version",
